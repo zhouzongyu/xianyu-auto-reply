@@ -1,59 +1,36 @@
 # 使用Python 3.11作为基础镜像
-FROM python:3.11-slim-bookworm AS base
+# 支持通过构建参数指定镜像源（解决多架构构建时的网络问题）
+# 使用方法：docker build --build-arg BASE_IMAGE=ccr.ccs.tencentyun.com/dockerp/library/python:3.11-slim-bookworm
+ARG BASE_IMAGE=python:3.11-slim-bookworm
+FROM ${BASE_IMAGE}
 
-# 设置环境变量
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    TZ=Asia/Shanghai \
-    DOCKER_ENV=true \
-    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+# 设置标签信息
+LABEL maintainer="zhinianboke"
+LABEL version="2.1.0"
+LABEL description="闲鱼自动回复系统 - 企业级多用户版本，支持自动发货和免拼发货"
+LABEL repository="https://github.com/zhinianboke/xianyu-auto-reply"
+LABEL license="仅供学习使用，禁止商业用途"
+LABEL author="zhinianboke"
+LABEL build-date=""
+LABEL vcs-ref=""
 
 # 设置工作目录
 WORKDIR /app
 
-# Builder stage: install Python dependencies
-FROM base AS builder
+# 设置环境变量
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV TZ=Asia/Shanghai
+ENV DOCKER_ENV=true
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-# 项目已完全开源，简化构建流程
+#更换中科大源
+RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources
 
-# 安装基础依赖
+# 安装系统依赖（包括Playwright浏览器依赖）
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        curl \
-        ca-certificates \
-        && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
-
-RUN python -m venv /opt/venv && \
-    /opt/venv/bin/pip install --no-cache-dir --upgrade pip
-ENV VIRTUAL_ENV=/opt/venv
-ENV PATH="$VIRTUAL_ENV/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
-
-# 复制requirements.txt并安装Python依赖
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# 复制项目文件
-COPY . .
-
-# 项目已完全开源，无需编译二进制模块
-
-# Runtime stage: only keep what is needed to run the app
-FROM base AS runtime
-
-# 设置标签信息
-LABEL maintainer="zhinianboke" \
-      version="2.2.0" \
-      description="闲鱼自动回复系统 - 企业级多用户版本，支持自动发货和免拼发货" \
-      repository="https://github.com/zhinianboke/xianyu-auto-reply" \
-      license="仅供学习使用，禁止商业用途" \
-      author="zhinianboke" \
-      build-date="" \
-      vcs-ref=""
-
-ENV NODE_PATH=/usr/lib/node_modules
-
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+        # 基础工具
         nodejs \
         npm \
         tzdata \
@@ -93,22 +70,33 @@ RUN apt-get update && \
         libxfixes3 \
         xdg-utils \
         chromium \
+        xvfb \
+        x11vnc \
+        fluxbox \
         # OpenCV运行时依赖
         libgl1 \
         libglib2.0-0 \
-        && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+        && apt-get clean \
+        && rm -rf /var/lib/apt/lists/* \
+        && rm -rf /tmp/* \
+        && rm -rf /var/tmp/*
 
-# 设置时区        
+# 设置时区
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # 验证Node.js安装并设置环境变量
 RUN node --version && npm --version
+ENV NODE_PATH=/usr/lib/node_modules
 
-COPY --from=builder /opt/venv /opt/venv
-COPY --from=builder /app /app
-ENV VIRTUAL_ENV=/opt/venv
-ENV PATH="$VIRTUAL_ENV/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
+# 复制requirements.txt并安装Python依赖
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple&& \
+    pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
+# 复制项目文件
+COPY . .
+
+# 安装Playwright浏览器（必须在复制项目文件之后）
 RUN playwright install chromium && \
     playwright install-deps chromium
 
@@ -129,7 +117,15 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-RUN chmod +x /app/entrypoint.sh
+# 复制启动脚本
+# 复制启动脚本和调试工具
+COPY entrypoint.sh /app/entrypoint.sh
+COPY debug-xvfb.sh /app/debug-xvfb.sh
+
+# 设置执行权限（使用多种方式确保权限正确）
+RUN chmod +x /app/entrypoint.sh /app/debug-xvfb.sh && \
+    chmod 755 /app/entrypoint.sh /app/debug-xvfb.sh && \
+    ls -la /app/entrypoint.sh /app/debug-xvfb.sh
 
 # 启动命令
 CMD ["/app/entrypoint.sh"]

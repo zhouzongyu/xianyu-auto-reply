@@ -76,6 +76,79 @@ fi
 
 echo "✓ 数据库文件位置检查完成"
 
+# 启动虚拟显示（如果启用有头模式）
+if [ "${USE_XVFB}" = "true" ] || [ "${ENABLE_HEADFUL}" = "true" ]; then
+    echo "========================================"
+    echo "  启动虚拟显示服务器（Xvfb）"
+    echo "========================================"
+    
+    # 清理可能存在的旧锁文件和进程
+    echo "检查并清理旧的 Xvfb 进程..."
+    
+    # 查找并杀死旧的 Xvfb 进程
+    pkill -9 Xvfb 2>/dev/null || true
+    pkill -9 x11vnc 2>/dev/null || true
+    
+    # 清理锁文件
+    rm -f /tmp/.X*-lock 2>/dev/null || true
+    rm -f /tmp/.X11-unix/X* 2>/dev/null || true
+    
+    # 等待进程完全退出
+    sleep 1
+    
+    # 尝试多个显示编号（从 99 开始）
+    DISPLAY_NUM=99
+    MAX_ATTEMPTS=10
+    XVFB_STARTED=false
+    
+    for i in $(seq 0 $MAX_ATTEMPTS); do
+        DISPLAY_NUM=$((99 + i))
+        echo "尝试启动 Xvfb :$DISPLAY_NUM ..."
+        
+        # 尝试启动 Xvfb
+        Xvfb :$DISPLAY_NUM -screen 0 1920x1080x24 -ac +extension GLX +render -noreset > /tmp/xvfb.log 2>&1 &
+        XVFB_PID=$!
+        
+        # 等待启动
+        sleep 2
+        
+        # 检查是否启动成功
+        if ps -p $XVFB_PID > /dev/null 2>&1; then
+            export DISPLAY=:$DISPLAY_NUM
+            XVFB_STARTED=true
+            echo "✓ Xvfb 启动成功 (PID: $XVFB_PID, DISPLAY: $DISPLAY)"
+            break
+        else
+            echo "  显示 :$DISPLAY_NUM 启动失败，尝试下一个..."
+            # 清理这次尝试的锁文件
+            rm -f /tmp/.X${DISPLAY_NUM}-lock 2>/dev/null || true
+        fi
+    done
+    
+    if [ "$XVFB_STARTED" = "true" ]; then
+        # 可选：启动 VNC 服务器用于远程查看（如果需要）
+        if [ "${ENABLE_VNC}" = "true" ]; then
+            echo "启动 VNC 服务器..."
+            x11vnc -display $DISPLAY -forever -shared -rfbport 5900 -nopw > /tmp/x11vnc.log 2>&1 &
+            VNC_PID=$!
+            sleep 1
+            
+            if ps -p $VNC_PID > /dev/null 2>&1; then
+                echo "✓ VNC 服务器启动成功 (PID: $VNC_PID, 端口: 5900)"
+                echo "  可以通过 VNC 客户端连接到 <容器IP>:5900 查看浏览器界面"
+            else
+                echo "⚠ VNC 服务器启动失败，查看日志: /tmp/x11vnc.log"
+            fi
+        fi
+    else
+        echo "⚠ Xvfb 启动失败（尝试了 $MAX_ATTEMPTS 次），将使用无头模式"
+        echo "  查看详细日志: /tmp/xvfb.log"
+        unset DISPLAY
+    fi
+    
+    echo "========================================"
+fi
+
 # 显示启动信息
 echo "========================================"
 echo "  系统启动参数："
@@ -83,6 +156,9 @@ echo "  - API端口: ${API_PORT:-8080}"
 echo "  - API主机: ${API_HOST:-0.0.0.0}"
 echo "  - Debug模式: ${DEBUG:-false}"
 echo "  - 自动重载: ${RELOAD:-false}"
+echo "  - 虚拟显示: ${USE_XVFB:-false}"
+echo "  - VNC服务: ${ENABLE_VNC:-false}"
+echo "  - DISPLAY: ${DISPLAY:-未设置}"
 echo "========================================"
 
 # 启动应用

@@ -3,13 +3,17 @@ services:
     build:
       context: .
       dockerfile: Dockerfile-cn
-    image: xianyu-auto-reply:latest
-    container_name: xianyu-auto-reply
+    image: xianyu-auto-reply:fixed
+    container_name: xianyu-auto-reply-fixed
     restart: unless-stopped
     # 使用root用户避免权限问题
     user: "0:0"
+    # 使用 bash 执行脚本，避免 Windows 行尾格式问题
+    # 即使挂载了 Windows 文件，bash 也能正确处理
+    entrypoint: ["/bin/bash", "-c", "dos2unix /app/entrypoint.sh 2>/dev/null || true; bash /app/entrypoint.sh"]
     ports:
-      - "${WEB_PORT:-8080}:8080"
+      - "8000:8080"
+      # - "5900:5900"    # VNC 端口（可选，用于远程查看浏览器）
     volumes:
       # 数据持久化
       - ./data:/app/data:rw
@@ -19,7 +23,15 @@ services:
       # - ./custom_config.yml:/app/global_config.yml:ro
       # 可选：备份目录
       - ./backups:/app/backups:rw
+      # 开发模式：挂载源代码（修改代码后只需重启容器）
+      - .:/app:rw
     environment:
+      # 启用虚拟显示（有头模式）
+      # - USE_XVFB=true           # 启用 Xvfb 虚拟显示
+      # - ENABLE_HEADFUL=true     # 启用有头模式
+      # - ENABLE_VNC=true         # 启用 VNC 服务器（可选）
+      # - DISPLAY=:99             # 虚拟显示编号
+      
       - PYTHONUNBUFFERED=${PYTHONUNBUFFERED:-1}
       - PYTHONDONTWRITEBYTECODE=${PYTHONDONTWRITEBYTECODE:-1}
       - TZ=${TZ:-Asia/Shanghai}
