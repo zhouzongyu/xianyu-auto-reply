@@ -358,9 +358,44 @@ async def log_requests(request, call_next):
 
 # 提供前端静态文件
 import os
-static_dir = os.path.join(os.path.dirname(__file__), 'static')
-if not os.path.exists(static_dir):
-    os.makedirs(static_dir, exist_ok=True)
+import sys
+
+# 获取静态文件目录，支持打包后的exe环境
+def get_static_dir():
+    """获取静态文件目录路径，支持打包后的exe环境"""
+    # 1. 如果是打包后的exe，从临时目录或exe目录查找
+    if getattr(sys, 'frozen', False):
+        # 先检查exe同目录
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        exe_static = os.path.join(exe_dir, 'static')
+        if os.path.exists(exe_static) and os.path.isfile(os.path.join(exe_static, 'index.html')):
+            logger.info(f"找到exe目录的static: {exe_static}")
+            return exe_static
+        
+        # 再检查临时目录
+        if hasattr(sys, '_MEIPASS'):
+            temp_static = os.path.join(os.path.abspath(sys._MEIPASS), 'static')
+            if os.path.exists(temp_static) and os.path.isfile(os.path.join(temp_static, 'index.html')):
+                logger.info(f"找到临时目录的static: {temp_static}")
+                return temp_static
+    
+    # 2. 开发环境：使用文件所在目录
+    default_static = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
+    if not os.path.exists(default_static):
+        os.makedirs(default_static, exist_ok=True)
+        logger.warning(f"静态文件目录不存在，已创建: {default_static}")
+    
+    return default_static
+
+static_dir = get_static_dir()
+logger.info(f"使用静态文件目录: {static_dir}")
+
+# 检查静态文件是否完整
+if not os.path.exists(os.path.join(static_dir, 'index.html')):
+    logger.error(f"⚠️ 警告: 静态文件目录不完整！缺少 index.html")
+    logger.error(f"静态文件目录: {static_dir}")
+else:
+    logger.info(f"✓ 静态文件检查通过: {static_dir}/index.html")
 
 app.mount('/static', StaticFiles(directory=static_dir), name='static')
 

@@ -10,6 +10,18 @@ import sys
 import shutil
 from pathlib import Path
 
+# 在打包后的exe环境中，确保模块路径正确（必须在导入其他模块之前设置）
+if getattr(sys, 'frozen', False):
+    # 打包后的exe环境
+    exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+    if exe_dir and exe_dir not in sys.path:
+        sys.path.insert(0, exe_dir)
+    # 如果有临时目录，也添加到路径（PyInstaller会使用）
+    if hasattr(sys, '_MEIPASS'):
+        meipass_dir = os.path.abspath(sys._MEIPASS)
+        if meipass_dir not in sys.path:
+            sys.path.insert(0, meipass_dir)
+
 # 设置标准输出编码为UTF-8（Windows兼容）
 def _setup_console_encoding():
     """设置控制台编码为UTF-8，避免Windows GBK编码问题"""
@@ -436,6 +448,13 @@ if sys.platform.startswith('linux'):
     except Exception as e:
         logger.debug(f"设置事件循环策略失败: {e}")
 
+# 预导入numpy，确保打包时被检测到
+try:
+    import numpy
+    import pandas
+except ImportError:
+    pass  # 如果未安装，继续运行（某些功能可能不可用）
+
 from config import AUTO_REPLY, COOKIES_LIST
 import cookie_manager as cm
 from db_manager import db_manager
@@ -465,17 +484,64 @@ def _start_api_server():
             host = parsed.hostname
         port = parsed.port or 8080
 
+    print(f"\n{'='*60}")
+    print(f"  启动Web服务器")
+    print(f"{'='*60}")
+    print(f"  访问地址: http://localhost:{port}")
+    print(f"  本地访问: http://127.0.0.1:{port}")
+    if host == '0.0.0.0':
+        print(f"  网络访问: http://<本机IP>:{port}")
+    print(f"{'='*60}\n")
+    
     logger.info(f"启动Web服务器: http://{host}:{port}")
+    logger.info(f"Web界面访问: http://localhost:{port}")
+    
     # 在后台线程中创建独立事件循环并直接运行 server.serve()
     import uvicorn
     try:
-        config = uvicorn.Config("reply_server:app", host=host, port=port, log_level="info")
+        # 直接导入app对象，避免打包后字符串导入失败
+        try:
+            from reply_server import app
+            logger.info("✓ 成功导入reply_server.app")
+            # 使用app对象而不是字符串
+            config = uvicorn.Config(app, host=host, port=port, log_level="info")
+        except ImportError as import_err:
+            logger.warning(f"直接导入失败，尝试字符串方式: {import_err}")
+            import traceback
+            logger.debug(f"导入错误详情:\n{traceback.format_exc()}")
+            # 回退到字符串方式
+            config = uvicorn.Config("reply_server:app", host=host, port=port, log_level="info")
+        
         server = uvicorn.Server(config)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        
+        print(f"✓ Web服务器正在启动，请稍候...")
+        logger.info("Web服务器启动中...")
+        
         loop.run_until_complete(server.serve())
+        
+        print(f"✓ Web服务器启动成功！\n")
+        logger.info("Web服务器启动成功")
+        
+    except OSError as e:
+        if "Address already in use" in str(e) or "address is already in use" in str(e).lower():
+            error_msg = f"端口 {port} 已被占用，请关闭占用该端口的程序或修改配置使用其他端口"
+            print(f"\n✗ 错误: {error_msg}\n")
+            logger.error(error_msg)
+        else:
+            error_msg = f"Web服务器启动失败: {e}"
+            print(f"\n✗ 错误: {error_msg}\n")
+            logger.error(error_msg)
+        import traceback
+        logger.error(f"详细错误信息:\n{traceback.format_exc()}")
     except Exception as e:
-        logger.error(f"uvicorn服务器启动失败: {e}")
+        error_msg = f"Web服务器启动失败: {e}"
+        print(f"\n✗ 错误: {error_msg}\n")
+        print("请查看日志文件获取详细错误信息")
+        logger.error(error_msg)
+        import traceback
+        logger.error(f"详细错误信息:\n{traceback.format_exc()}")
         try:
             # 确保线程内事件循环被正确关闭
             loop = asyncio.get_event_loop()
@@ -571,9 +637,35 @@ async def main():
         logger.info("从环境变量加载 default Cookie")
 
     # 启动 API 服务线程
-    print("启动 API 服务线程...")
-    threading.Thread(target=_start_api_server, daemon=True).start()
+    print("\n启动 API 服务线程...")
+    api_thread = threading.Thread(target=_start_api_server, daemon=True)
+    api_thread.start()
     print("API 服务线程已启动")
+    
+    # 等待一小段时间，确保服务器有时间启动
+    import time
+    time.sleep(3)  # 等待3秒让服务器启动
+    
+    # 获取实际使用的端口号
+    api_conf = AUTO_REPLY.get('api', {})
+    check_port = int(os.getenv('API_PORT', api_conf.get('port', 8080)))
+    
+    # 检查服务器是否正常启动
+    try:
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(2)
+        result = sock.connect_ex(('127.0.0.1', check_port))
+        sock.close()
+        if result == 0:
+            print(f"✓ Web服务器端口 {check_port} 检查通过，可以访问了！")
+            print(f"  浏览器访问: http://localhost:{check_port}")
+            print(f"  默认账号: admin / admin123\n")
+        else:
+            print(f"⚠ Web服务器端口 {check_port} 检查失败，请查看日志")
+            print(f"  可以尝试访问: http://localhost:{check_port}\n")
+    except Exception as e:
+        logger.debug(f"端口检查失败: {e}")
 
     # 上报用户统计
     try:
