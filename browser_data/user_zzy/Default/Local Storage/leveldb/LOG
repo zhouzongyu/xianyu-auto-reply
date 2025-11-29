@@ -1,0 +1,9 @@
+2025/11/29-10:21:48.967 33f8 Reusing MANIFEST D:\workspace\ai\xianyu-auto-reply\browser_data\user_zzy\Default\Local Storage\leveldb/MANIFEST-000001
+2025/11/29-10:21:49.014 33f8 Recovering log #4
+2025/11/29-10:21:49.016 33f8 Level-0 table #7: started
+2025/11/29-10:21:49.028 33f8 Level-0 table #7: 87493 bytes OK
+2025/11/29-10:21:49.029 33f8 Recovering log #6
+2025/11/29-10:21:49.030 33f8 Level-0 table #8: started
+2025/11/29-10:21:49.036 33f8 Level-0 table #8: 17387 bytes OK
+2025/11/29-10:21:49.043 33f8 Delete type=0 #4
+2025/11/29-10:21:49.043 33f8 Delete type=0 #6

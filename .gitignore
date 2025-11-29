@@ -792,3 +792,5 @@ docker-compose.override.yml
 .docker/**
 docker-data/**
 container_logs/**
+browser_data/**
+backups/**
