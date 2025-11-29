@@ -208,6 +208,101 @@ def copy_additional_files():
     
     return True
 
+def install_playwright_browser():
+    """安装Playwright浏览器到打包目录"""
+    print_step("安装Playwright浏览器")
+    
+    dist_dir = Path('dist')
+    exe_dir = dist_dir / 'XianyuAutoReply'
+    
+    if not (exe_dir / 'XianyuAutoReply.exe').exists():
+        print("⚠ 找不到exe文件，跳过Playwright浏览器安装")
+        return False
+    
+    # 检查是否已安装Playwright
+    try:
+        import playwright
+    except ImportError:
+        print("⚠ Playwright模块未安装，跳过浏览器安装")
+        print("   请在打包环境中安装: pip install playwright")
+        return False
+    
+    playwright_dir = exe_dir / 'playwright'
+    
+    # 检查是否已经存在
+    if playwright_dir.exists():
+        chromium_dirs = list(playwright_dir.glob('chromium-*'))
+        if chromium_dirs:
+            chrome_exe = chromium_dirs[0] / 'chrome-win' / 'chrome.exe'
+            if chrome_exe.exists() and chrome_exe.stat().st_size > 0:
+                print(f"✓ Playwright浏览器已存在: {chromium_dirs[0].name}")
+                return True
+    
+    print("正在安装Playwright Chromium浏览器到打包目录...")
+    print("这可能需要几分钟时间，请耐心等待...")
+    
+    try:
+        # 设置环境变量，让Playwright安装到指定目录
+        import os
+        os.environ['PLAYWRIGHT_BROWSERS_PATH'] = str(playwright_dir.absolute())
+        
+        # 方法1: 尝试使用playwright的Python API安装
+        try:
+            from playwright._impl._driver import install_driver, install_browsers
+            print("   正在安装Playwright驱动...")
+            install_driver()
+            print("   正在安装Chromium浏览器...")
+            install_browsers(['chromium'])
+            print(f"✓ Playwright浏览器安装成功（通过API）")
+            print(f"  位置: {playwright_dir}")
+            return True
+        except ImportError:
+            # API不可用，使用命令行方式
+            print("   使用命令行方式安装...")
+            result = subprocess.run(
+                [sys.executable, '-m', 'playwright', 'install', 'chromium'],
+                capture_output=True,
+                text=True,
+                timeout=600,  # 10分钟超时
+                env={**os.environ, 'PLAYWRIGHT_BROWSERS_PATH': str(playwright_dir.absolute())}
+            )
+            
+            if result.returncode == 0:
+                # 验证安装是否成功
+                chromium_dirs = list(playwright_dir.glob('chromium-*'))
+                if chromium_dirs:
+                    chrome_exe = chromium_dirs[0] / 'chrome-win' / 'chrome.exe'
+                    if chrome_exe.exists() and chrome_exe.stat().st_size > 0:
+                        print(f"✓ Playwright浏览器安装成功")
+                        print(f"  位置: {playwright_dir}")
+                        print(f"  版本: {chromium_dirs[0].name}")
+                        return True
+                    else:
+                        print(f"⚠ 浏览器文件不完整")
+                        return False
+                else:
+                    print(f"⚠ 未找到浏览器目录")
+                    return False
+            else:
+                print(f"✗ Playwright浏览器安装失败")
+                if result.stdout:
+                    print(f"   输出: {result.stdout[-500:]}")
+                if result.stderr:
+                    print(f"   错误: {result.stderr[-500:]}")
+                return False
+    except subprocess.TimeoutExpired:
+        print(f"✗ Playwright浏览器安装超时（超过10分钟）")
+        return False
+    except Exception as e:
+        print(f"✗ Playwright浏览器安装失败: {e}")
+        import traceback
+        print(f"   详细错误: {traceback.format_exc()}")
+        return False
+    finally:
+        # 清除环境变量
+        if 'PLAYWRIGHT_BROWSERS_PATH' in os.environ:
+            del os.environ['PLAYWRIGHT_BROWSERS_PATH']
+
 def create_launcher_script():
     """创建启动脚本"""
     print_step("创建启动脚本")
@@ -274,7 +369,13 @@ def main():
         print("\n✗ 复制额外文件失败")
         sys.exit(1)
     
-    # 6. 创建启动脚本
+    # 6. 安装Playwright浏览器到打包目录
+    if not install_playwright_browser():
+        print("\n⚠ 警告: Playwright浏览器安装失败")
+        print("   程序可以运行，但Playwright功能可能不可用")
+        print("   用户可以手动运行exe，程序会自动尝试安装")
+    
+    # 7. 创建启动脚本
     create_launcher_script()
     
     # 完成
@@ -295,11 +396,29 @@ def main():
         else:
             print(f"\n⚠ 警告: static目录不存在或不完整！")
         
+        # 检查Playwright浏览器
+        playwright_dir = exe_dir / 'playwright'
+        if playwright_dir.exists():
+            chromium_dirs = list(playwright_dir.glob('chromium-*'))
+            if chromium_dirs:
+                chrome_exe = chromium_dirs[0] / 'chrome-win' / 'chrome.exe'
+                if chrome_exe.exists() and chrome_exe.stat().st_size > 0:
+                    print(f"\n✓ Playwright浏览器已安装: {chromium_dirs[0].name}")
+                    print(f"  位置: {playwright_dir}")
+                else:
+                    print(f"\n⚠ 警告: Playwright浏览器文件不完整！")
+            else:
+                print(f"\n⚠ 警告: Playwright浏览器目录存在但未找到浏览器！")
+        else:
+            print(f"\n⚠ 警告: Playwright浏览器未安装！")
+            print("  程序运行时会自动尝试安装，但首次安装可能需要几分钟")
+        
         print(f"\n建议:")
         print("  1. 将整个 dist/XianyuAutoReply 文件夹复制到目标位置")
         print("  2. 运行 启动.bat 或直接运行 XianyuAutoReply.exe")
         print("  3. 首次运行会自动创建数据目录")
-        print("  4. 访问 http://localhost:8080 使用系统")
+        print("  4. 如果Playwright浏览器未安装，程序会自动安装（需要几分钟）")
+        print("  5. 访问 http://localhost:8080 使用系统")
     else:
         print("\n⚠ 未找到打包后的exe文件，请检查dist目录")
 
