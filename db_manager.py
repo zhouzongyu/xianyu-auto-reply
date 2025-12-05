@@ -375,6 +375,43 @@ class DBManager:
             )
             ''')
 
+            # 创建商品关键词配置表
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS item_keywords (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                keyword TEXT NOT NULL,
+                include_keywords TEXT,
+                min_amount INTEGER,
+                max_amount INTEGER,
+                region_limit INTEGER DEFAULT 0,
+                auto_order INTEGER DEFAULT 0,
+                personal_idle INTEGER DEFAULT 0,
+                user_id INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            ''')
+
+            # 创建采集商品表
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS collected_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                item_id TEXT NOT NULL,
+                title TEXT,
+                price TEXT,
+                seller_name TEXT,
+                location TEXT,
+                want_count INTEGER,
+                item_url TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                UNIQUE(user_id, item_id)
+            )
+            ''')
+
             # 创建消息通知配置表
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS message_notifications (
@@ -2707,13 +2744,13 @@ class DBManager:
     async def send_verification_email(self, email: str, code: str) -> bool:
         """发送验证码邮件（支持SMTP和API两种方式）"""
         try:
-            subject = "闲鱼自动回复系统 - 邮箱验证码"
+            subject = "闲鱼秒拍监控系统 - 邮箱验证码"
             # 使用简单的纯文本邮件内容
-            text_content = f"""【闲鱼自动回复系统】邮箱验证码
+            text_content = f"""【闲鱼秒拍监控系统】邮箱验证码
 
 您好！
 
-感谢您使用闲鱼自动回复系统。为了确保账户安全，请使用以下验证码完成邮箱验证：
+感谢您使用闲鱼秒拍监控系统。为了确保账户安全，请使用以下验证码完成邮箱验证：
 
 验证码：{code}
 
@@ -2724,11 +2761,11 @@ class DBManager:
 • 系统不会主动索要您的验证码
 
 如果您在使用过程中遇到任何问题，请联系我们的技术支持团队。
-感谢您选择闲鱼自动回复系统！
+感谢您选择闲鱼秒拍监控系统！
 
 ---
 此邮件由系统自动发送，请勿直接回复
-© 2025 闲鱼自动回复系统"""
+© 2025 闲鱼秒拍监控系统"""
 
             # 从系统设置读取SMTP配置
             try:
@@ -5083,15 +5120,268 @@ class DBManager:
                     cursor.execute("VACUUM")
                     logger.info("VACUUM执行完成")
                     stats['vacuum_executed'] = True
-                else:
-                    stats['vacuum_executed'] = False
                 
-                stats['total_cleaned'] = total_cleaned
                 return stats
                 
         except Exception as e:
-            logger.error(f"清理历史数据时出错: {e}")
+            logger.error(f"清理过期数据失败: {e}")
+            self.conn.rollback()
             return {'error': str(e)}
+
+    # ==================== 商品关键词管理方法 ====================
+
+    def get_item_keywords(self, user_id: int = None) -> List[Dict[str, Any]]:
+        """获取商品关键词配置列表"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                if user_id:
+                    cursor.execute('''
+                    SELECT id, keyword, include_keywords, min_amount, max_amount,
+                           region_limit, auto_order, personal_idle, user_id,
+                           created_at, updated_at
+                    FROM item_keywords
+                    WHERE user_id = ?
+                    ORDER BY created_at DESC
+                    ''', (user_id,))
+                else:
+                    cursor.execute('''
+                    SELECT id, keyword, include_keywords, min_amount, max_amount,
+                           region_limit, auto_order, personal_idle, user_id,
+                           created_at, updated_at
+                    FROM item_keywords
+                    ORDER BY created_at DESC
+                    ''')
+                
+                rows = cursor.fetchall()
+                return [{
+                    'id': row[0],
+                    'keyword': row[1],
+                    'include_keywords': row[2],
+                    'min_amount': row[3],
+                    'max_amount': row[4],
+                    'region_limit': row[5],
+                    'auto_order': row[6],
+                    'personal_idle': row[7],
+                    'user_id': row[8],
+                    'created_at': row[9],
+                    'updated_at': row[10]
+                } for row in rows]
+            except Exception as e:
+                logger.error(f"获取商品关键词配置失败: {e}")
+                return []
+
+    def create_item_keyword(self, keyword: str, include_keywords: str = None,
+                           min_amount: int = None, max_amount: int = None,
+                           region_limit: int = 0, auto_order: int = 0,
+                           personal_idle: int = 0, user_id: int = 1) -> Optional[Dict[str, Any]]:
+        """创建商品关键词配置"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                INSERT INTO item_keywords 
+                (keyword, include_keywords, min_amount, max_amount, region_limit, 
+                 auto_order, personal_idle, user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (keyword, include_keywords, min_amount, max_amount,
+                      region_limit, auto_order, personal_idle, user_id))
+                
+                self.conn.commit()
+                keyword_id = cursor.lastrowid
+                logger.info(f"创建商品关键词配置成功: {keyword_id} - {keyword}")
+                return self.get_item_keyword_by_id(keyword_id)
+            except Exception as e:
+                logger.error(f"创建商品关键词配置失败: {e}")
+                self.conn.rollback()
+                return None
+
+    def update_item_keyword(self, keyword_id: int, keyword: str = None,
+                           include_keywords: str = None, min_amount: int = None,
+                           max_amount: int = None, region_limit: int = None,
+                           auto_order: int = None, personal_idle: int = None) -> bool:
+        """更新商品关键词配置"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                # 构建更新字段
+                updates = []
+                params = []
+                
+                if keyword is not None:
+                    updates.append("keyword = ?")
+                    params.append(keyword)
+                if include_keywords is not None:
+                    updates.append("include_keywords = ?")
+                    params.append(include_keywords)
+                if min_amount is not None:
+                    updates.append("min_amount = ?")
+                    params.append(min_amount)
+                if max_amount is not None:
+                    updates.append("max_amount = ?")
+                    params.append(max_amount)
+                if region_limit is not None:
+                    updates.append("region_limit = ?")
+                    params.append(region_limit)
+                if auto_order is not None:
+                    updates.append("auto_order = ?")
+                    params.append(auto_order)
+                if personal_idle is not None:
+                    updates.append("personal_idle = ?")
+                    params.append(personal_idle)
+                
+                if not updates:
+                    return False
+                
+                updates.append("updated_at = CURRENT_TIMESTAMP")
+                params.append(keyword_id)
+                
+                cursor.execute(f'''
+                UPDATE item_keywords
+                SET {', '.join(updates)}
+                WHERE id = ?
+                ''', params)
+                
+                self.conn.commit()
+                logger.info(f"更新商品关键词配置成功: {keyword_id}")
+                return True
+            except Exception as e:
+                logger.error(f"更新商品关键词配置失败: {e}")
+                self.conn.rollback()
+                return False
+
+    def delete_item_keyword(self, keyword_id: int) -> bool:
+        """删除商品关键词配置"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('DELETE FROM item_keywords WHERE id = ?', (keyword_id,))
+                self.conn.commit()
+                logger.info(f"删除商品关键词配置成功: {keyword_id}")
+                return True
+            except Exception as e:
+                logger.error(f"删除商品关键词配置失败: {e}")
+                self.conn.rollback()
+                return False
+
+    def get_item_keyword_by_id(self, keyword_id: int) -> Optional[Dict[str, Any]]:
+        """根据ID获取商品关键词配置"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                SELECT id, keyword, include_keywords, min_amount, max_amount,
+                       region_limit, auto_order, personal_idle, user_id,
+                       created_at, updated_at
+                FROM item_keywords
+                WHERE id = ?
+                ''', (keyword_id,))
+                
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        'id': row[0],
+                        'keyword': row[1],
+                        'include_keywords': row[2],
+                        'min_amount': row[3],
+                        'max_amount': row[4],
+                        'region_limit': row[5],
+                        'auto_order': row[6],
+                        'personal_idle': row[7],
+                        'user_id': row[8],
+                        'created_at': row[9],
+                        'updated_at': row[10]
+                    }
+                return None
+            except Exception as e:
+                logger.error(f"获取商品关键词配置失败: {e}")
+                return None
+
+    # ==================== 商品采集管理方法 ====================
+
+    def save_collected_item(self, user_id: int, item_id: str, title: str = None,
+                           price: str = None, seller_name: str = None,
+                           location: str = None, want_count: int = None,
+                           item_url: str = None, search_keyword: str = None) -> bool:
+        """保存采集的商品信息"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                # 检查是否已存在
+                cursor.execute('''
+                SELECT id FROM collected_items 
+                WHERE user_id = ? AND item_id = ?
+                ''', (user_id, item_id))
+                
+                if cursor.fetchone():
+                    # 已存在，更新
+                    cursor.execute('''
+                    UPDATE collected_items
+                    SET title = ?, price = ?, seller_name = ?, location = ?,
+                        want_count = ?, item_url = ?, search_keyword = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = ? AND item_id = ?
+                    ''', (title, price, seller_name, location, want_count, item_url, search_keyword, user_id, item_id))
+                else:
+                    # 不存在，插入
+                    cursor.execute('''
+                    INSERT INTO collected_items 
+                    (user_id, item_id, title, price, seller_name, location, want_count, item_url, search_keyword)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (user_id, item_id, title, price, seller_name, location, want_count, item_url, search_keyword))
+                
+                self.conn.commit()
+                return True
+            except Exception as e:
+                logger.error(f"保存采集商品失败: {e}")
+                self.conn.rollback()
+                return False
+
+    def get_collected_items(self, user_id: int, limit: int = 1000) -> List[Dict[str, Any]]:
+        """获取采集的商品列表"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                SELECT id, item_id, title, price, seller_name, location, want_count, item_url, created_at
+                FROM collected_items
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                ''', (user_id, limit))
+                
+                rows = cursor.fetchall()
+                return [{
+                    'id': row[0],
+                    'item_id': row[1],
+                    'title': row[2],
+                    'price': row[3],
+                    'seller_name': row[4],
+                    'location': row[5],
+                    'want_count': row[6],
+                    'item_url': row[7],
+                    'collected_at': row[8]
+                } for row in rows]
+            except Exception as e:
+                logger.error(f"获取采集商品失败: {e}")
+                return []
+
+    def clear_collected_items(self, user_id: int) -> bool:
+        """清空采集的商品列表"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                DELETE FROM collected_items WHERE user_id = ?
+                ''', (user_id,))
+                self.conn.commit()
+                logger.info(f"清空用户 {user_id} 的采集商品列表")
+                return True
+            except Exception as e:
+                logger.error(f"清空采集商品失败: {e}")
+                self.conn.rollback()
+                return False
 
 
 # 全局单例

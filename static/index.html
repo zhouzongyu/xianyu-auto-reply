@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>闲鱼自动回复管理系统</title>
+  <title>闲鱼秒拍监控系统</title>
   <link rel="stylesheet" href="/static/lib/bootstrap/bootstrap.min.css">
   <link rel="stylesheet" href="/static/lib/bootstrap-icons/bootstrap-icons.css">
   
@@ -37,66 +37,23 @@
         </a>
       </div>
       <div class="nav-item">
-        <a href="#" class="nav-link" onclick="showSection('items')">
-          <i class="bi bi-box-seam"></i>
-          商品管理
-        </a>
-      </div>
-      <div class="nav-item">
-        <a href="#" class="nav-link" onclick="showSection('orders')">
-          <i class="bi bi-receipt-cutoff"></i>
-          订单管理
-        </a>
-      </div>
-      <div class="nav-item">
-        <a href="#" class="nav-link" onclick="showSection('auto-reply')">
-          <i class="bi bi-chat-left-text"></i>
-          自动回复
-        </a>
-      </div>
-      <div class="nav-item">
-        <a href="#" class="nav-link" onclick="showSection('items-reply')">
-          <i class="bi bi-chat-left-text"></i>
-          指定商品回复
-        </a>
-      </div>
-      <div class="nav-item">
-        <a href="#" class="nav-link" onclick="showSection('cards')">
-          <i class="bi bi-credit-card"></i>
-          卡券管理
-        </a>
-      </div>
-      <div class="nav-item">
-        <a href="#" class="nav-link" onclick="showSection('auto-delivery')">
-          <i class="bi bi-truck"></i>
-          自动发货
-        </a>
-      </div>
-      <div class="nav-item">
-        <a href="#" class="nav-link" onclick="showSection('notification-channels')">
-          <i class="bi bi-bell"></i>
-          通知渠道
-        </a>
-      </div>
-      <div class="nav-item">
-        <a href="#" class="nav-link" onclick="showSection('message-notifications')">
-          <i class="bi bi-chat-dots"></i>
-          消息通知
-        </a>
-      </div>
-      <div class="nav-item">
         <a href="#" class="nav-link" onclick="showSection('item-search')">
           <i class="bi bi-search"></i>
           商品搜索
         </a>
       </div>
       <div class="nav-item">
-        <a href="#" class="nav-link" onclick="showSection('system-settings')">
-          <i class="bi bi-gear"></i>
-          系统设置
+        <a href="#" class="nav-link" onclick="showSection('item-keywords')">
+          <i class="bi bi-tags"></i>
+          商品关键词管理
         </a>
       </div>
-
+      <div class="nav-item">
+        <a href="#" class="nav-link" onclick="showSection('item-collection')">
+          <i class="bi bi-collection-play"></i>
+          商品采集
+        </a>
+      </div>
       <!-- 管理员专用菜单 -->
       <div id="adminMenuSection" style="display: none;">
         <div class="nav-divider mt-3 mb-2">
@@ -106,6 +63,12 @@
           <a href="#" class="nav-link" onclick="showSection('user-management')">
             <i class="bi bi-people"></i>
             用户管理
+          </a>
+        </div>
+        <div class="nav-item">
+          <a href="#" class="nav-link" onclick="showSection('system-settings')">
+            <i class="bi bi-gear"></i>
+            系统设置
           </a>
         </div>
         <div class="nav-item">
@@ -382,150 +345,9 @@
       </div>
     </div>
 
-    <!-- 商品管理内容 -->
-    <div id="items-section" class="content-section">
-      <div class="content-header">
-        <h2 class="mb-0">
-          <i class="bi bi-box-seam me-2"></i>
-          商品管理
-        </h2>
-        <p class="text-muted mb-0">管理各账号的商品信息</p>
-      </div>
 
-      <div class="content-body">
-        <!-- 筛选和搜索 -->
-        <div class="card mb-4">
-          <div class="card-body">
-            <div class="row align-items-end mb-3">
-              <div class="col-md-6">
-                <label for="itemCookieFilter" class="form-label">筛选账号</label>
-                <select class="form-select" id="itemCookieFilter" onchange="loadItemsByCookie()">
-                  <option value="">所有账号</option>
-                </select>
-              </div>
-
-              <div class="col-md-6">
-                <div class="d-flex justify-content-end align-items-end gap-2">
-                  <!-- 页码输入 -->
-                  <div class="d-flex align-items-center gap-2">
-                    <label for="pageNumber" class="form-label mb-0 text-nowrap">页码:</label>
-                    <input type="number" class="form-control" id="pageNumber" placeholder="页码" min="1" value="1" style="width: 80px;">
-                  </div>
-                  <div class="d-flex gap-2">
-                    <button class="btn btn-success" onclick="getAllItemsFromAccount()">
-                      <i class="bi bi-download me-1"></i>获取指定页
-                    </button>
-                    <button class="btn btn-warning" onclick="getAllItemsFromAccountAll()">
-                      <i class="bi bi-collection me-1"></i>获取所有页
-                    </button>
-                    <button class="btn btn-primary" onclick="refreshItems()">
-                      <i class="bi bi-arrow-clockwise me-1"></i>刷新
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- 搜索结果统计 -->
-            <div id="itemSearchStats" class="text-muted small" style="display: none;">
-              <i class="bi bi-search me-1"></i>
-              <span id="itemSearchStatsText"></span>
-            </div>
-          </div>
-        </div>
-
-        <!-- 商品列表 -->
-        <div class="card">
-          <div class="card-header d-flex justify-content-between align-items-center">
-            <div class="d-flex align-items-center gap-3">
-              <input type="text" class="form-control" id="itemSearchInput"
-                     placeholder="搜索商品标题或详情..." style="width: 300px;">
-              <h5 class="mb-0">商品列表(自动发货根据商品标题和商品详情匹配关键字)</h5>
-            </div>
-            <button class="btn btn-sm btn-outline-danger" onclick="batchDeleteItems()" id="batchDeleteBtn" disabled>
-              <i class="bi bi-trash"></i> 批量删除
-            </button>
-          </div>
-          <div class="card-body">
-            <!-- 搜索统计信息 -->
-            <div id="itemSearchStats" class="text-muted small mb-2" style="display: none;">
-              <i class="bi bi-search me-1"></i>
-              <span id="itemSearchStatsText"></span>
-            </div>
-            <div class="table-responsive">
-              <table class="table table-hover">
-                <thead>
-                  <tr>
-                    <th style="width: 5%">
-                      <input type="checkbox" id="selectAllItems" onchange="toggleSelectAll(this)">
-                    </th>
-                    <th style="width: 10%">账号ID</th>
-                    <th style="width: 10%">商品ID</th>
-                    <th style="width: 16%">商品标题</th>
-                    <th style="width: 18%">商品详情</th>
-                    <th style="width: 18%">商品价格</th>
-                    <th style="width: 8%">多规格</th>
-                    <th style="width: 8%">多数量发货</th>
-                    <th style="width: 10%">更新时间</th>
-                    <th style="width: 15%">操作</th>
-                  </tr>
-                </thead>
-                <tbody id="itemsTableBody">
-                  <tr>
-                    <td colspan="10" class="text-center text-muted">加载中...</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <!-- 分页控件 -->
-          <div class="card-footer" id="itemsPagination">
-            <div class="d-flex justify-content-between align-items-center">
-              <div class="text-muted small">
-                <span id="itemsPageInfo">显示第 1-10 条，共 0 条记录</span>
-              </div>
-              <div class="d-flex align-items-center gap-2">
-                <div class="btn-group" role="group">
-                  <button type="button" class="btn btn-outline-secondary btn-sm" id="itemsFirstPage" onclick="goToItemsPage(1)" disabled>
-                    <i class="bi bi-chevron-double-left"></i>
-                  </button>
-                  <button type="button" class="btn btn-outline-secondary btn-sm" id="itemsPrevPage" onclick="goToItemsPage(currentItemsPage - 1)" disabled>
-                    <i class="bi bi-chevron-left"></i>
-                  </button>
-                </div>
-
-                <div class="d-flex align-items-center gap-2 mx-2">
-                  <span class="text-muted small">第</span>
-                  <input type="number" class="form-control form-control-sm" id="itemsPageInput"
-                         style="width: 60px;" min="1" value="1">
-                  <span class="text-muted small">页，共 <span id="itemsTotalPages">0</span> 页</span>
-                </div>
-
-                <div class="btn-group" role="group">
-                  <button type="button" class="btn btn-outline-secondary btn-sm" id="itemsNextPage" onclick="goToItemsPage(currentItemsPage + 1)" disabled>
-                    <i class="bi bi-chevron-right"></i>
-                  </button>
-                  <button type="button" class="btn btn-outline-secondary btn-sm" id="itemsLastPage" onclick="goToItemsPage(totalItemsPages)" disabled>
-                    <i class="bi bi-chevron-double-right"></i>
-                  </button>
-                </div>
-
-                <select class="form-select form-select-sm ms-2" id="itemsPageSize" style="width: auto;">
-                  <option value="10">10条/页</option>
-                  <option value="20" selected>20条/页</option>
-                  <option value="50">50条/页</option>
-                  <option value="100">100条/页</option>
-                </select>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-     <!-- 指定商品自动管理内容 -->
-    <div id="items-reply-section" class="content-section">
+    <!-- 指定商品自动管理内容 - 已删除 -->
+    <div id="items-reply-section" class="content-section" style="display: none;">
       <div class="content-header">
         <h2 class="mb-0">
           <i class="bi bi-box-seam me-2"></i>
@@ -1733,6 +1555,152 @@
             <i class="bi bi-search" style="font-size: 3rem; color: #ccc;"></i>
             <h5 class="mt-3 text-muted">未找到相关商品</h5>
             <p class="text-muted">请尝试使用其他关键词或调整搜索条件</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 商品关键词管理内容 -->
+    <div id="item-keywords-section" class="content-section">
+      <div class="content-header">
+        <h2 class="mb-0">
+          <i class="bi bi-tags me-2"></i>
+          关键词设置
+        </h2>
+        <p class="text-muted mb-0">配置商品监控关键词，设置价格范围、区域限制等条件</p>
+      </div>
+      <div class="content-body">
+        <!-- 关键词配置表格 -->
+        <div class="card">
+          <div class="card-body">
+            <div class="table-responsive">
+              <table class="table table-bordered table-hover" id="keywordConfigTable">
+                <thead class="table-light">
+                  <tr>
+                    <th style="width: 12%">关键词 <i class="bi bi-info-circle" data-bs-toggle="tooltip" title="监控的主要关键词"></i></th>
+                    <th style="width: 18%">包含的关键字 <i class="bi bi-info-circle" data-bs-toggle="tooltip" title="必须包含的关键字，多个用逗号分隔"></i></th>
+                    <th style="width: 10%">最小金额 <i class="bi bi-info-circle" data-bs-toggle="tooltip" title="商品价格最小值"></i></th>
+                    <th style="width: 10%">最大金额 <i class="bi bi-info-circle" data-bs-toggle="tooltip" title="商品价格最大值"></i></th>
+                    <th style="width: 12%">区域限制 <i class="bi bi-info-circle" data-bs-toggle="tooltip" title="是否限制区域"></i></th>
+                    <th style="width: 12%">自动下单 <i class="bi bi-info-circle" data-bs-toggle="tooltip" title="是否自动下单"></i></th>
+                    <th style="width: 12%">个人闲置 <i class="bi bi-info-circle" data-bs-toggle="tooltip" title="是否只显示个人闲置"></i></th>
+                    <th style="width: 14%">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="keywordConfigTableBody">
+                  <tr>
+                    <td colspan="8" class="text-center text-muted py-4">
+                      <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+                      暂无关键词配置，点击"添加一行数据"开始配置
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card-footer">
+            <div class="d-flex justify-content-between">
+              <button type="button" class="btn btn-primary" onclick="addKeywordRow()">
+                <i class="bi bi-plus-lg me-1"></i>添加一行数据
+              </button>
+              <button type="button" class="btn btn-success" onclick="saveAllKeywordConfigs()">
+                <i class="bi bi-save me-1"></i>保存所有配置
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 商品采集内容 -->
+    <div id="item-collection-section" class="content-section">
+      <div class="content-header">
+        <div class="d-flex justify-content-between align-items-center">
+          <div>
+            <h2 class="mb-0">
+              <i class="bi bi-collection-play me-2"></i>
+              闲鱼数据监控系统
+            </h2>
+          </div>
+          <div class="d-flex align-items-center gap-3">
+            <div class="d-flex align-items-center gap-2">
+              <span class="badge bg-secondary" id="monitorStatusBadge">
+                <span class="badge-dot bg-danger me-1"></span>已停止
+              </span>
+              <span class="text-muted small" id="keywordCount">关键词: 0个</span>
+              <span class="text-muted small" id="executedRounds">已执行: 0轮</span>
+            </div>
+            <div class="btn-group">
+              <button class="btn btn-primary" id="startCollectionBtn" onclick="startCollectionMonitor()">
+                <i class="bi bi-play-circle me-1"></i>开始采集
+              </button>
+              <button class="btn btn-danger" id="stopCollectionBtn" onclick="stopCollectionMonitor()" style="display: none;">
+                <i class="bi bi-stop-circle me-1"></i>停止采集
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="content-body">
+        <!-- 实时数据列表 -->
+        <div class="card mb-3">
+          <div class="card-header">
+            <h5 class="mb-0">
+              <i class="bi bi-list-ul me-2"></i>
+              实时数据列表
+            </h5>
+          </div>
+          <div class="card-body p-0">
+            <div class="table-responsive">
+              <table class="table table-hover mb-0">
+                <thead class="table-light">
+                  <tr>
+                    <th style="width: 5%">ID</th>
+                    <th style="width: 25%">商品标题</th>
+                    <th style="width: 10%">商品链接</th>
+                    <th style="width: 8%">价格</th>
+                    <th style="width: 12%">卖家昵称</th>
+                    <th style="width: 12%">搜索关键词</th>
+                    <th style="width: 13%">发布时间</th>
+                    <th style="width: 15%">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="collectedItemsTableBody">
+                  <tr>
+                    <td colspan="8" class="text-center text-muted py-5">
+                      <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+                      暂无采集商品，点击"开始采集"开始监控
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- 运行日志 -->
+        <div class="card">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">
+              <i class="bi bi-terminal me-2"></i>
+              运行日志
+            </h5>
+            <div class="d-flex align-items-center gap-2">
+              <span class="text-muted small" id="lastSearchTimeDisplay">上次搜索: --</span>
+              <button class="btn btn-sm btn-outline-secondary" onclick="clearCollectionLogs()">
+                <i class="bi bi-trash me-1"></i>清空日志
+              </button>
+            </div>
+          </div>
+          <div class="card-body p-0">
+            <div id="collectionLogContainer" class="collection-log-container">
+              <div class="collection-log-content" id="collectionLogContent">
+                <div class="log-entry">
+                  <span class="log-time">[系统]</span>
+                  <span class="log-message">等待开始采集...</span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>

@@ -308,7 +308,7 @@ class ResponseModel(BaseModel):
 app = FastAPI(
     title="Xianyu Auto Reply API",
     version="1.0.0",
-    description="闲鱼自动回复系统API",
+    description="闲鱼秒拍监控系统API",
     docs_url="/docs",
     redoc_url="/redoc"
 )
@@ -4538,6 +4538,373 @@ async def clear_logs(_: None = Depends(require_auth)):
     except Exception as e:
         return {"success": False, "message": f"清空日志失败: {str(e)}"}
 
+
+# ==================== 商品关键词管理API ====================
+
+class ItemKeywordCreate(BaseModel):
+    keyword: str
+    include_keywords: Optional[str] = None
+    min_amount: Optional[int] = None
+    max_amount: Optional[int] = None
+    region_limit: int = 0
+    auto_order: int = 0
+    personal_idle: int = 0
+
+class ItemKeywordUpdate(BaseModel):
+    keyword: Optional[str] = None
+    include_keywords: Optional[str] = None
+    min_amount: Optional[int] = None
+    max_amount: Optional[int] = None
+    region_limit: Optional[int] = None
+    auto_order: Optional[int] = None
+    personal_idle: Optional[int] = None
+
+@app.get("/item-keywords")
+def get_item_keywords(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """获取当前用户的商品关键词配置列表"""
+    try:
+        user_id = current_user['user_id']
+        from db_manager import db_manager
+        keywords = db_manager.get_item_keywords(user_id)
+        return {"keywords": keywords}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取关键词配置失败: {str(e)}")
+
+@app.post("/item-keywords")
+def create_item_keyword(keyword_data: ItemKeywordCreate, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """创建商品关键词配置"""
+    try:
+        user_id = current_user['user_id']
+        from db_manager import db_manager
+        keyword = db_manager.create_item_keyword(
+            keyword=keyword_data.keyword,
+            include_keywords=keyword_data.include_keywords,
+            min_amount=keyword_data.min_amount,
+            max_amount=keyword_data.max_amount,
+            region_limit=keyword_data.region_limit,
+            auto_order=keyword_data.auto_order,
+            personal_idle=keyword_data.personal_idle,
+            user_id=user_id
+        )
+        if keyword:
+            return {"keyword": keyword}
+        else:
+            raise HTTPException(status_code=500, detail="创建关键词配置失败")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"创建关键词配置失败: {str(e)}")
+
+@app.put("/item-keywords/{keyword_id}")
+def update_item_keyword(keyword_id: int, keyword_data: ItemKeywordUpdate, 
+                       current_user: Dict[str, Any] = Depends(get_current_user)):
+    """更新商品关键词配置"""
+    try:
+        from db_manager import db_manager
+        # 检查关键词是否存在且属于当前用户
+        existing = db_manager.get_item_keyword_by_id(keyword_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="关键词配置不存在")
+        if existing['user_id'] != current_user['user_id']:
+            raise HTTPException(status_code=403, detail="无权访问此关键词配置")
+        
+        success = db_manager.update_item_keyword(
+            keyword_id=keyword_id,
+            keyword=keyword_data.keyword,
+            include_keywords=keyword_data.include_keywords,
+            min_amount=keyword_data.min_amount,
+            max_amount=keyword_data.max_amount,
+            region_limit=keyword_data.region_limit,
+            auto_order=keyword_data.auto_order,
+            personal_idle=keyword_data.personal_idle
+        )
+        if success:
+            updated = db_manager.get_item_keyword_by_id(keyword_id)
+            return {"keyword": updated}
+        else:
+            raise HTTPException(status_code=500, detail="更新关键词配置失败")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"更新关键词配置失败: {str(e)}")
+
+@app.delete("/item-keywords/{keyword_id}")
+def delete_item_keyword(keyword_id: int, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """删除商品关键词配置"""
+    try:
+        from db_manager import db_manager
+        # 检查关键词是否存在且属于当前用户
+        existing = db_manager.get_item_keyword_by_id(keyword_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="关键词配置不存在")
+        if existing['user_id'] != current_user['user_id']:
+            raise HTTPException(status_code=403, detail="无权访问此关键词配置")
+        
+        success = db_manager.delete_item_keyword(keyword_id)
+        if success:
+            return {"success": True, "message": "删除成功"}
+        else:
+            raise HTTPException(status_code=500, detail="删除关键词配置失败")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"删除关键词配置失败: {str(e)}")
+
+# ==================== 商品采集监控API ====================
+
+# 商品采集监控状态（全局变量，实际应该使用数据库或Redis存储）
+collection_monitors = {}  # {user_id: {'running': bool, 'keyword_id': int, 'interval': int, 'start_time': str, 'task': asyncio.Task}}
+
+class CollectionMonitorStart(BaseModel):
+    keyword_id: int
+    interval: int = 5
+
+class CollectionSearchRequest(BaseModel):
+    keyword_id: int
+
+class CollectionMonitorStartAll(BaseModel):
+    keyword_ids: List[int]
+    interval: int = 5
+
+async def perform_collection_search(keyword_id: int, user_id: int):
+    """执行商品采集搜索"""
+    try:
+        from db_manager import db_manager
+        from utils.item_search import search_xianyu_items
+        
+        # 获取关键词配置
+        keyword_config = db_manager.get_item_keyword_by_id(keyword_id)
+        if not keyword_config:
+            logger.error(f"关键词配置不存在: {keyword_id}")
+            return []
+        
+        if keyword_config['user_id'] != user_id:
+            logger.error(f"无权访问此关键词配置: {keyword_id}")
+            return []
+        
+        # 构建搜索关键词
+        search_keyword = keyword_config['keyword']
+        if keyword_config.get('include_keywords'):
+            search_keyword = f"{search_keyword} {keyword_config['include_keywords']}"
+        
+        # 执行搜索（只搜索第一页，获取最新商品）
+        result = await search_xianyu_items(search_keyword, page=1, page_size=20)
+        
+        if result.get('error'):
+            logger.error(f"搜索失败: {result['error']}")
+            return []
+        
+        items = result.get('items', [])
+        
+        # 应用过滤条件
+        filtered_items = []
+        for item in items:
+            # 价格过滤
+            price = float(item.get('price', 0) or 0)
+            if keyword_config.get('min_amount') and price < keyword_config['min_amount']:
+                continue
+            if keyword_config.get('max_amount') and price > keyword_config['max_amount']:
+                continue
+            
+            # 区域限制（如果需要，可以在这里添加）
+            # 个人闲置过滤（如果需要，可以在这里添加）
+            
+            filtered_items.append(item)
+        
+        # 构建搜索关键词信息
+        search_keyword_text = keyword_config['keyword']
+        if keyword_config.get('include_keywords'):
+            search_keyword_text = f"{search_keyword_text},{keyword_config['include_keywords']}"
+        
+        # 保存采集的商品到数据库
+        for item in filtered_items:
+            db_manager.save_collected_item(
+                user_id=user_id,
+                item_id=item.get('item_id'),
+                title=item.get('title'),
+                price=item.get('price'),
+                seller_name=item.get('seller_name'),
+                location=item.get('location'),
+                want_count=item.get('want_count'),
+                item_url=item.get('item_url'),
+                search_keyword=search_keyword_text
+            )
+        
+        return filtered_items
+        
+    except Exception as e:
+        logger.error(f"执行采集搜索失败: {e}")
+        return []
+
+async def collection_monitor_loop(user_id: int, keyword_id: int, interval: int):
+    """商品采集监控循环（单个关键词）"""
+    try:
+        while collection_monitors.get(user_id, {}).get('running', False):
+            try:
+                items = await perform_collection_search(keyword_id, user_id)
+                if items:
+                    logger.info(f"用户 {user_id} 采集到 {len(items)} 个新商品")
+            except Exception as e:
+                logger.error(f"采集监控循环错误: {e}")
+            
+            # 等待指定间隔
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        logger.info(f"用户 {user_id} 的采集监控已取消")
+    except Exception as e:
+        logger.error(f"采集监控循环异常: {e}")
+
+async def collection_monitor_loop_all(user_id: int, keyword_ids: List[int], interval: int):
+    """商品采集监控循环（所有关键词）"""
+    try:
+        while collection_monitors.get(user_id, {}).get('running', False):
+            try:
+                # 遍历所有关键词配置
+                for keyword_id in keyword_ids:
+                    if not collection_monitors.get(user_id, {}).get('running', False):
+                        break
+                    items = await perform_collection_search(keyword_id, user_id)
+                    if items:
+                        logger.info(f"用户 {user_id} 关键词 {keyword_id} 采集到 {len(items)} 个新商品")
+            except Exception as e:
+                logger.error(f"采集监控循环错误: {e}")
+            
+            # 等待指定间隔
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        logger.info(f"用户 {user_id} 的采集监控已取消")
+    except Exception as e:
+        logger.error(f"采集监控循环异常: {e}")
+
+@app.post("/item-collection/start")
+async def start_collection_monitor(request: CollectionMonitorStart, 
+                                   current_user: Dict[str, Any] = Depends(get_current_user)):
+    """启动商品采集监控"""
+    try:
+        user_id = current_user['user_id']
+        
+        # 检查是否已有监控在运行
+        if collection_monitors.get(user_id, {}).get('running', False):
+            raise HTTPException(status_code=400, detail="监控已在运行中")
+        
+        # 验证关键词配置
+        from db_manager import db_manager
+        keyword_config = db_manager.get_item_keyword_by_id(request.keyword_id)
+        if not keyword_config:
+            raise HTTPException(status_code=404, detail="关键词配置不存在")
+        if keyword_config['user_id'] != user_id:
+            raise HTTPException(status_code=403, detail="无权访问此关键词配置")
+        
+        # 创建监控任务
+        loop = asyncio.get_event_loop()
+        task = loop.create_task(collection_monitor_loop(user_id, request.keyword_id, request.interval))
+        
+        # 保存监控状态
+        collection_monitors[user_id] = {
+            'running': True,
+            'keyword_id': request.keyword_id,
+            'interval': request.interval,
+            'start_time': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'task': task
+        }
+        
+        logger.info(f"用户 {user_id} 启动商品采集监控: keyword_id={request.keyword_id}, interval={request.interval}秒")
+        return {"success": True, "message": "监控已启动"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"启动采集监控失败: {e}")
+        raise HTTPException(status_code=500, detail=f"启动监控失败: {str(e)}")
+
+@app.post("/item-collection/stop")
+async def stop_collection_monitor(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """停止商品采集监控"""
+    try:
+        user_id = current_user['user_id']
+        
+        monitor = collection_monitors.get(user_id)
+        if not monitor or not monitor.get('running'):
+            raise HTTPException(status_code=400, detail="监控未运行")
+        
+        # 取消任务
+        task = monitor.get('task')
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        
+        # 更新状态
+        collection_monitors[user_id]['running'] = False
+        
+        logger.info(f"用户 {user_id} 停止商品采集监控")
+        return {"success": True, "message": "监控已停止"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"停止采集监控失败: {e}")
+        raise HTTPException(status_code=500, detail=f"停止监控失败: {str(e)}")
+
+@app.get("/item-collection/status")
+async def get_collection_monitor_status(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """获取商品采集监控状态"""
+    try:
+        user_id = current_user['user_id']
+        monitor = collection_monitors.get(user_id, {})
+        
+        return {
+            "running": monitor.get('running', False),
+            "keyword_id": monitor.get('keyword_id'),
+            "interval": monitor.get('interval', 5),
+            "start_time": monitor.get('start_time')
+        }
+    except Exception as e:
+        logger.error(f"获取监控状态失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取状态失败: {str(e)}")
+
+@app.post("/item-collection/search")
+async def perform_collection_search_api(request: CollectionSearchRequest,
+                                       current_user: Dict[str, Any] = Depends(get_current_user)):
+    """执行一次商品采集搜索"""
+    try:
+        user_id = current_user['user_id']
+        items = await perform_collection_search(request.keyword_id, user_id)
+        return {"items": items, "count": len(items)}
+    except Exception as e:
+        logger.error(f"执行采集搜索失败: {e}")
+        raise HTTPException(status_code=500, detail=f"搜索失败: {str(e)}")
+
+@app.get("/item-collection/items")
+async def get_collected_items(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """获取采集的商品列表"""
+    try:
+        user_id = current_user['user_id']
+        from db_manager import db_manager
+        items = db_manager.get_collected_items(user_id)
+        return {"items": items}
+    except Exception as e:
+        logger.error(f"获取采集商品失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取商品失败: {str(e)}")
+
+@app.post("/item-collection/clear")
+async def clear_collected_items(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """清空采集的商品列表"""
+    try:
+        user_id = current_user['user_id']
+        from db_manager import db_manager
+        success = db_manager.clear_collected_items(user_id)
+        if success:
+            return {"success": True, "message": "已清空采集列表"}
+        else:
+            raise HTTPException(status_code=500, detail="清空失败")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"清空采集商品失败: {e}")
+        raise HTTPException(status_code=500, detail=f"清空失败: {str(e)}")
 
 # ==================== 商品管理API ====================
 

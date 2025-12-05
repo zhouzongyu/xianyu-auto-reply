@@ -9,5 +9,52 @@
 @import url('components.css');
 @import url('admin.css');
 
+/* 商品采集页面样式 */
+.collection-log-container {
+    height: 200px;
+    overflow-y: auto;
+    background-color: #1e1e1e;
+    color: #d4d4d4;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 13px;
+    padding: 10px;
+    border-radius: 4px;
+}
+
+.collection-log-content {
+    min-height: 100%;
+}
+
+.log-entry {
+    margin-bottom: 4px;
+    line-height: 1.6;
+    word-wrap: break-word;
+}
+
+.log-time {
+    color: #858585;
+    margin-right: 8px;
+}
+
+.log-message {
+    color: #d4d4d4;
+}
+
+.badge-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 4px;
+}
+
+.badge-dot.bg-danger {
+    background-color: #dc3545;
+}
+
+.badge-dot.bg-success {
+    background-color: #198754;
+}
+
 
 

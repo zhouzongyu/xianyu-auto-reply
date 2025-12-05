@@ -98,6 +98,12 @@ function showSection(sectionName) {
     case 'message-notifications':  // 【消息通知菜单】
         loadMessageNotifications();
         break;
+    case 'item-keywords':      // 【商品关键词管理菜单】
+        loadKeywordConfigs();
+        break;
+    case 'item-collection':    // 【商品采集菜单】
+        loadItemCollection();
+        break;
     case 'system-settings':    // 【系统设置菜单】
         loadSystemSettings();
         break;
@@ -2588,7 +2594,7 @@ const outgoingConfigs = {
                 id: 'smtp_from',
                 label: '发件人显示名（可选）',
                 type: 'text',
-                placeholder: '闲鱼自动回复系统',
+                placeholder: '闲鱼秒拍监控系统',
                 required: false,
                 help: '邮件发件人显示的名称，留空则使用邮箱地址'
             },
@@ -2714,7 +2720,7 @@ const channelTypeConfigs = {
         id: 'title',
         label: '通知标题（可选）',
         type: 'text',
-        placeholder: '闲鱼自动回复通知',
+        placeholder: '闲鱼秒拍监控通知',
         required: false,
         help: '推送通知的标题'
         },
@@ -10681,6 +10687,750 @@ async function clearRiskControlLogs() {
 }
 
 // ================================
+// 商品采集功能
+// ================================
+let collectedItemsData = []; // 存储采集的商品数据
+let currentCollectedItemsPage = 1;
+let collectedItemsPerPage = 20;
+let totalCollectedItemsPages = 0;
+let collectionMonitorInterval = null; // 监控定时器
+let collectionMonitorRunning = false; // 监控运行状态
+let collectionStartTime = null; // 监控开始时间
+let collectionMonitorTimer = null; // 运行时长定时器
+let collectedItemIds = new Set(); // 已采集的商品ID集合，用于去重
+
+// 加载商品采集页面
+async function loadItemCollection() {
+    // 加载关键词配置列表
+    await loadCollectionKeywordOptions();
+    
+    // 加载已采集的商品
+    await refreshCollectedItems();
+    
+    // 检查监控状态
+    await checkCollectionMonitorStatus();
+    
+    // 更新统计信息
+    updateCollectionStats();
+    
+    // 添加日志
+    addCollectionLog('系统', '页面加载完成');
+}
+
+// 加载关键词配置选项
+async function loadCollectionKeywordOptions() {
+    try {
+        const response = await fetch(`${apiBase}/item-keywords`, {
+            headers: {
+                'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+            }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            const select = document.getElementById('collectionKeywordSelect');
+            if (select) {
+                select.innerHTML = '<option value="">请选择关键词配置</option>';
+                data.keywords.forEach(keyword => {
+                    const option = document.createElement('option');
+                    option.value = keyword.id;
+                    option.textContent = `${keyword.keyword}${keyword.include_keywords ? ' (' + keyword.include_keywords + ')' : ''}`;
+                    select.appendChild(option);
+                });
+            }
+        }
+    } catch (error) {
+        console.error('加载关键词配置失败:', error);
+    }
+}
+
+// 更新采集信息
+function updateCollectionInfo() {
+    const select = document.getElementById('collectionKeywordSelect');
+    const selectedId = select.value;
+    if (selectedId) {
+        console.log('选中关键词配置:', selectedId);
+    }
+}
+
+// 开始采集（新版本，使用按钮）
+async function startCollectionMonitor() {
+    if (collectionMonitorRunning) {
+        showToast('监控已在运行中', 'warning');
+        return;
+    }
+    
+    // 获取所有启用的关键词配置
+    try {
+        const response = await fetch(`${apiBase}/item-keywords`, {
+            headers: {
+                'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+            }
+        });
+
+        if (!response.ok) {
+            showToast('获取关键词配置失败', 'danger');
+            return;
+        }
+
+        const data = await response.json();
+        const keywords = data.keywords || [];
+        
+        if (keywords.length === 0) {
+            showToast('请先在"商品关键词管理"中添加关键词配置', 'warning');
+            return;
+        }
+
+        // 使用所有关键词配置进行监控
+        const keywordIds = keywords.map(k => k.id);
+        const interval = 5; // 固定5秒间隔
+        
+        try {
+            const startResponse = await fetch(`${apiBase}/item-collection/start-all`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+                },
+                body: JSON.stringify({
+                    keyword_ids: keywordIds,
+                    interval: interval
+                })
+            });
+
+            if (startResponse.ok) {
+                collectionMonitorRunning = true;
+                collectionStartTime = new Date();
+                executedRounds = 0;
+                
+                // 更新UI状态
+                updateMonitorStatus(true);
+                updateKeywordCount(keywords.length);
+                
+                // 开始搜索循环（使用所有关键词）
+                startCollectionSearchLoopAll(keywords, interval);
+                startMonitorTimer();
+                
+                addCollectionLog('系统', '开始采集监控');
+                showToast('监控已启动', 'success');
+            } else {
+                const error = await startResponse.json();
+                showToast(`启动监控失败: ${error.detail || '未知错误'}`, 'danger');
+            }
+        } catch (error) {
+            console.error('启动监控失败:', error);
+            showToast('启动监控失败', 'danger');
+        }
+    } catch (error) {
+        console.error('获取关键词配置失败:', error);
+        showToast('获取关键词配置失败', 'danger');
+    }
+}
+
+// 停止采集
+async function stopCollectionMonitor() {
+    if (!collectionMonitorRunning) {
+        showToast('监控未运行', 'warning');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${apiBase}/item-collection/stop`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+            }
+        });
+
+        if (response.ok) {
+            collectionMonitorRunning = false;
+            collectionStartTime = null;
+            
+            // 更新UI状态
+            updateMonitorStatus(false);
+            
+            stopCollectionSearchLoop();
+            stopMonitorTimer();
+            
+            addCollectionLog('系统', '停止监控');
+            addCollectionLog('系统', '监控已停止');
+            showToast('监控已停止', 'info');
+        } else {
+            const error = await response.json();
+            showToast(`停止监控失败: ${error.detail || '未知错误'}`, 'danger');
+        }
+    } catch (error) {
+        console.error('停止监控失败:', error);
+        showToast('停止监控失败', 'danger');
+    }
+}
+
+// 更新监控状态显示
+function updateMonitorStatus(running) {
+    const badge = document.getElementById('monitorStatusBadge');
+    const startBtn = document.getElementById('startCollectionBtn');
+    const stopBtn = document.getElementById('stopCollectionBtn');
+    
+    if (running) {
+        badge.innerHTML = '<span class="badge-dot bg-success me-1"></span>运行中';
+        badge.className = 'badge bg-success';
+        if (startBtn) startBtn.style.display = 'none';
+        if (stopBtn) stopBtn.style.display = 'inline-block';
+    } else {
+        badge.innerHTML = '<span class="badge-dot bg-danger me-1"></span>已停止';
+        badge.className = 'badge bg-secondary';
+        if (startBtn) startBtn.style.display = 'inline-block';
+        if (stopBtn) stopBtn.style.display = 'none';
+    }
+}
+
+// 更新关键词数量
+function updateKeywordCount(count) {
+    document.getElementById('keywordCount').textContent = `关键词: ${count}个`;
+}
+
+// 更新执行轮数
+let executedRounds = 0;
+function updateExecutedRounds() {
+    executedRounds++;
+    document.getElementById('executedRounds').textContent = `已执行: ${executedRounds}轮`;
+}
+
+// 开始搜索循环
+function startCollectionSearchLoop(keywordId, interval) {
+    performCollectionSearch(keywordId);
+    collectionMonitorInterval = setInterval(() => {
+        performCollectionSearch(keywordId);
+    }, interval * 1000);
+}
+
+// 停止搜索循环
+function stopCollectionSearchLoop() {
+    if (collectionMonitorInterval) {
+        clearInterval(collectionMonitorInterval);
+        collectionMonitorInterval = null;
+    }
+}
+
+// 执行采集搜索
+async function performCollectionSearch(keywordId) {
+    try {
+        const response = await fetch(`${apiBase}/item-collection/search`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+            },
+            body: JSON.stringify({
+                keyword_id: parseInt(keywordId)
+            })
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            if (data.items && data.items.length > 0) {
+                const newItems = data.items.filter(item => !collectedItemIds.has(item.item_id));
+                
+                if (newItems.length > 0) {
+                    const now = new Date();
+                    newItems.forEach(item => {
+                        item.collected_at = now.toISOString();
+                        collectedItemIds.add(item.item_id);
+                    });
+                    
+                    collectedItemsData = [...newItems, ...collectedItemsData];
+                    renderCollectedItems();
+                    updateCollectionStats();
+                    showToast(`采集到 ${newItems.length} 个新商品`, 'success');
+                }
+            }
+            document.getElementById('lastSearchTime').textContent = new Date().toLocaleTimeString();
+        }
+    } catch (error) {
+        console.error('采集搜索失败:', error);
+    }
+}
+
+// 检查监控状态
+async function checkCollectionMonitorStatus() {
+    try {
+        const response = await fetch(`${apiBase}/item-collection/status`, {
+            headers: {
+                'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+            }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            if (data.running) {
+                collectionMonitorRunning = true;
+                collectionStartTime = new Date(data.start_time);
+                
+                // 加载关键词配置
+                const keywordsResponse = await fetch(`${apiBase}/item-keywords`, {
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+                    }
+                });
+                
+                if (keywordsResponse.ok) {
+                    const keywordsData = await keywordsResponse.json();
+                    const keywords = keywordsData.keywords || [];
+                    updateKeywordCount(keywords.length);
+                    
+                    // 恢复搜索循环
+                    startCollectionSearchLoopAll(keywords, data.interval || 5);
+                    startMonitorTimer();
+                }
+                
+                updateMonitorStatus(true);
+                addCollectionLog('系统', '监控状态已恢复');
+            } else {
+                updateMonitorStatus(false);
+            }
+        }
+    } catch (error) {
+        console.error('检查监控状态失败:', error);
+    }
+}
+
+// 渲染采集商品列表
+function renderCollectedItems() {
+    const tbody = document.getElementById('collectedItemsTableBody');
+    if (!tbody) return;
+
+    if (collectedItemsData.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="8" class="text-center text-muted py-4">
+                    <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+                    暂无采集商品，开启监控后开始采集
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    const start = (currentCollectedItemsPage - 1) * collectedItemsPerPage;
+    const end = start + collectedItemsPerPage;
+    const pageData = collectedItemsData.slice(start, end);
+    totalCollectedItemsPages = Math.ceil(collectedItemsData.length / collectedItemsPerPage);
+    
+    tbody.innerHTML = pageData.map(item => `
+        <tr>
+            <td><code>${escapeHtml(item.item_id || 'N/A')}</code></td>
+            <td>
+                <a href="https://www.goofish.com/item?id=${item.item_id}" target="_blank" class="text-decoration-none">
+                    ${escapeHtml(item.title || '无标题')}
+                </a>
+            </td>
+            <td><span class="badge bg-danger">¥${item.price || '0'}</span></td>
+            <td><span class="badge bg-info">${item.want_count || 0}</span></td>
+            <td>${escapeHtml(item.seller_name || 'N/A')}</td>
+            <td>${escapeHtml(item.location || 'N/A')}</td>
+            <td>${item.collected_at ? new Date(item.collected_at).toLocaleString() : 'N/A'}</td>
+            <td>
+                <button class="btn btn-sm btn-outline-primary" onclick="viewItemDetail('${item.item_id}')" title="查看详情">
+                    <i class="bi bi-eye"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-danger" onclick="removeCollectedItem('${item.item_id}')" title="删除">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </td>
+        </tr>
+    `).join('');
+    
+    updateCollectedItemsPagination();
+}
+
+// 更新统计信息
+function updateCollectionStats() {
+    // 更新累计采集数量
+    const totalCount = collectedItemsData.length;
+    // 可以在这里更新其他统计信息
+}
+
+// 刷新采集商品列表
+async function refreshCollectedItems() {
+    try {
+        const response = await fetch(`${apiBase}/item-collection/items`, {
+            headers: {
+                'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+            }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            collectedItemsData = data.items || [];
+            // 为每个商品添加search_keyword字段（如果没有）
+            collectedItemsData.forEach(item => {
+                if (!item.search_keyword) {
+                    item.search_keyword = '未知';
+                }
+            });
+            collectedItemIds = new Set(collectedItemsData.map(item => item.item_id));
+            renderCollectedItems();
+            updateCollectionStats();
+        }
+    } catch (error) {
+        console.error('刷新采集商品失败:', error);
+    }
+}
+
+// 清空采集列表
+async function clearCollectedItems() {
+    if (!confirm('确定要清空所有采集的商品吗？此操作不可恢复！')) return;
+    
+    try {
+        const response = await fetch(`${apiBase}/item-collection/clear`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+            }
+        });
+
+        if (response.ok) {
+            collectedItemsData = [];
+            collectedItemIds.clear();
+            renderCollectedItems();
+            updateCollectionStats();
+            showToast('已清空采集列表', 'success');
+        }
+    } catch (error) {
+        console.error('清空采集列表失败:', error);
+        showToast('清空失败', 'danger');
+    }
+}
+
+// 删除单个采集商品
+function removeCollectedItem(itemId) {
+    collectedItemsData = collectedItemsData.filter(item => item.item_id !== itemId);
+    collectedItemIds.delete(itemId);
+    renderCollectedItems();
+    updateCollectionStats();
+    showToast('已删除', 'success');
+}
+
+// 查看商品详情
+function viewItemDetail(itemId) {
+    window.open(`https://www.goofish.com/item?id=${itemId}`, '_blank');
+}
+
+// 更新统计信息
+function updateCollectionStats() {
+    document.getElementById('totalCollectedItems').textContent = collectedItemsData.length;
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayItems = collectedItemsData.filter(item => {
+        const collectedDate = new Date(item.collected_at);
+        return collectedDate >= today;
+    });
+    document.getElementById('newItemsToday').textContent = todayItems.length;
+}
+
+// 开始运行时长计时
+function startMonitorTimer() {
+    if (collectionMonitorTimer) clearInterval(collectionMonitorTimer);
+    
+    collectionMonitorTimer = setInterval(() => {
+        if (collectionStartTime) {
+            const now = new Date();
+            const diff = Math.floor((now - collectionStartTime) / 1000);
+            const hours = Math.floor(diff / 3600);
+            const minutes = Math.floor((diff % 3600) / 60);
+            const seconds = diff % 60;
+            document.getElementById('monitorRunTime').textContent = 
+                `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        }
+    }, 1000);
+}
+
+// 停止运行时长计时
+function stopMonitorTimer() {
+    if (collectionMonitorTimer) {
+        clearInterval(collectionMonitorTimer);
+        collectionMonitorTimer = null;
+    }
+    document.getElementById('monitorRunTime').textContent = '00:00:00';
+}
+
+// ================================
+// 商品关键词管理功能
+// ================================
+let keywordConfigs = []; // 存储关键词配置数据
+
+// 加载关键词配置
+async function loadKeywordConfigs() {
+    try {
+        const response = await fetch(`${apiBase}/item-keywords`, {
+            headers: {
+                'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+            }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            keywordConfigs = data.keywords || [];
+            renderKeywordConfigs();
+        } else {
+            showToast('加载关键词配置失败', 'danger');
+        }
+    } catch (error) {
+        console.error('加载关键词配置失败:', error);
+        showToast('加载关键词配置失败', 'danger');
+    }
+}
+
+// 渲染关键词配置表格
+function renderKeywordConfigs() {
+    const tbody = document.getElementById('keywordConfigTableBody');
+    if (!tbody) return;
+
+    if (keywordConfigs.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="8" class="text-center text-muted py-4">
+                    <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+                    暂无关键词配置，点击"添加一行数据"开始配置
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    tbody.innerHTML = keywordConfigs.map((config, index) => `
+        <tr data-id="${config.id || ''}">
+            <td>
+                <input type="text" class="form-control form-control-sm" 
+                       value="${escapeHtml(config.keyword || '')}" 
+                       data-field="keyword" placeholder="例如: vivo">
+            </td>
+            <td>
+                <input type="text" class="form-control form-control-sm" 
+                       value="${escapeHtml(config.include_keywords || '')}" 
+                       data-field="include_keywords" placeholder="例如: vivo x fold 5">
+            </td>
+            <td>
+                <input type="number" class="form-control form-control-sm" 
+                       value="${config.min_amount || ''}" 
+                       data-field="min_amount" placeholder="最小金额">
+            </td>
+            <td>
+                <input type="number" class="form-control form-control-sm" 
+                       value="${config.max_amount || ''}" 
+                       data-field="max_amount" placeholder="最大金额">
+            </td>
+            <td>
+                <select class="form-select form-select-sm" data-field="region_limit">
+                    <option value="0" ${config.region_limit == 0 ? 'selected' : ''}>不</option>
+                    <option value="1" ${config.region_limit == 1 ? 'selected' : ''}>是</option>
+                </select>
+            </td>
+            <td>
+                <select class="form-select form-select-sm" data-field="auto_order">
+                    <option value="0" ${config.auto_order == 0 ? 'selected' : ''}>关</option>
+                    <option value="1" ${config.auto_order == 1 ? 'selected' : ''}>开</option>
+                </select>
+            </td>
+            <td>
+                <select class="form-select form-select-sm" data-field="personal_idle">
+                    <option value="0" ${config.personal_idle == 0 ? 'selected' : ''}>关</option>
+                    <option value="1" ${config.personal_idle == 1 ? 'selected' : ''}>开</option>
+                </select>
+            </td>
+            <td>
+                <button class="btn btn-success btn-sm me-1" onclick="saveKeywordConfig(${index})" title="保存">
+                    <i class="bi bi-check-lg"></i> 保存
+                </button>
+                <button class="btn btn-danger btn-sm" onclick="deleteKeywordConfig(${index})" title="删除">
+                    <i class="bi bi-trash"></i> 删除
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+// 添加一行数据
+function addKeywordRow() {
+    keywordConfigs.push({
+        id: null,
+        keyword: '',
+        include_keywords: '',
+        min_amount: '',
+        max_amount: '',
+        region_limit: 0,
+        auto_order: 0,
+        personal_idle: 0
+    });
+    renderKeywordConfigs();
+}
+
+// 保存单个关键词配置
+async function saveKeywordConfig(index) {
+    const config = keywordConfigs[index];
+    if (!config) return;
+
+    // 从表格中获取最新值
+    const row = document.querySelector(`#keywordConfigTableBody tr[data-id="${config.id || ''}"]`);
+    if (row) {
+        config.keyword = row.querySelector('[data-field="keyword"]').value.trim();
+        config.include_keywords = row.querySelector('[data-field="include_keywords"]').value.trim();
+        config.min_amount = row.querySelector('[data-field="min_amount"]').value ? parseInt(row.querySelector('[data-field="min_amount"]').value) : null;
+        config.max_amount = row.querySelector('[data-field="max_amount"]').value ? parseInt(row.querySelector('[data-field="max_amount"]').value) : null;
+        config.region_limit = parseInt(row.querySelector('[data-field="region_limit"]').value);
+        config.auto_order = parseInt(row.querySelector('[data-field="auto_order"]').value);
+        config.personal_idle = parseInt(row.querySelector('[data-field="personal_idle"]').value);
+    }
+
+    if (!config.keyword) {
+        showToast('请输入关键词', 'warning');
+        return;
+    }
+
+    try {
+        const url = config.id 
+            ? `${apiBase}/item-keywords/${config.id}`
+            : `${apiBase}/item-keywords`;
+        const method = config.id ? 'PUT' : 'POST';
+
+        const response = await fetch(url, {
+            method: method,
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+            },
+            body: JSON.stringify(config)
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            keywordConfigs[index] = data.keyword;
+            showToast('保存成功', 'success');
+            renderKeywordConfigs();
+        } else {
+            const error = await response.json();
+            showToast(`保存失败: ${error.detail || '未知错误'}`, 'danger');
+        }
+    } catch (error) {
+        console.error('保存关键词配置失败:', error);
+        showToast('保存失败', 'danger');
+    }
+}
+
+// 删除关键词配置
+async function deleteKeywordConfig(index) {
+    const config = keywordConfigs[index];
+    if (!config) return;
+
+    if (!confirm(`确定要删除关键词配置 "${config.keyword}" 吗？`)) {
+        return;
+    }
+
+    if (!config.id) {
+        // 如果是新添加的未保存的配置，直接删除
+        keywordConfigs.splice(index, 1);
+        renderKeywordConfigs();
+        return;
+    }
+
+    try {
+        const response = await fetch(`${apiBase}/item-keywords/${config.id}`, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+            }
+        });
+
+        if (response.ok) {
+            keywordConfigs.splice(index, 1);
+            showToast('删除成功', 'success');
+            renderKeywordConfigs();
+        } else {
+            const error = await response.json();
+            showToast(`删除失败: ${error.detail || '未知错误'}`, 'danger');
+        }
+    } catch (error) {
+        console.error('删除关键词配置失败:', error);
+        showToast('删除失败', 'danger');
+    }
+}
+
+// 保存所有配置
+async function saveAllKeywordConfigs() {
+    // 先更新所有配置的值
+    const rows = document.querySelectorAll('#keywordConfigTableBody tr[data-id]');
+    rows.forEach((row, index) => {
+        if (keywordConfigs[index]) {
+            keywordConfigs[index].keyword = row.querySelector('[data-field="keyword"]').value.trim();
+            keywordConfigs[index].include_keywords = row.querySelector('[data-field="include_keywords"]').value.trim();
+            keywordConfigs[index].min_amount = row.querySelector('[data-field="min_amount"]').value ? parseInt(row.querySelector('[data-field="min_amount"]').value) : null;
+            keywordConfigs[index].max_amount = row.querySelector('[data-field="max_amount"]').value ? parseInt(row.querySelector('[data-field="max_amount"]').value) : null;
+            keywordConfigs[index].region_limit = parseInt(row.querySelector('[data-field="region_limit"]').value);
+            keywordConfigs[index].auto_order = parseInt(row.querySelector('[data-field="auto_order"]').value);
+            keywordConfigs[index].personal_idle = parseInt(row.querySelector('[data-field="personal_idle"]').value);
+        }
+    });
+
+    // 验证所有配置
+    for (let i = 0; i < keywordConfigs.length; i++) {
+        if (!keywordConfigs[i].keyword) {
+            showToast(`第 ${i + 1} 行关键词不能为空`, 'warning');
+            return;
+        }
+    }
+
+    // 批量保存
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < keywordConfigs.length; i++) {
+        try {
+            const config = keywordConfigs[i];
+            const url = config.id 
+                ? `${apiBase}/item-keywords/${config.id}`
+                : `${apiBase}/item-keywords`;
+            const method = config.id ? 'PUT' : 'POST';
+
+            const response = await fetch(url, {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+            },
+                body: JSON.stringify(config)
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                keywordConfigs[i] = data.keyword;
+                successCount++;
+            } else {
+                failCount++;
+            }
+        } catch (error) {
+            console.error(`保存第 ${i + 1} 行配置失败:`, error);
+            failCount++;
+        }
+    }
+
+    if (failCount === 0) {
+        showToast(`成功保存 ${successCount} 条配置`, 'success');
+        renderKeywordConfigs();
+    } else {
+        showToast(`保存完成：成功 ${successCount} 条，失败 ${failCount} 条`, 'warning');
+        renderKeywordConfigs();
+    }
+}
+
+// HTML转义函数
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// ================================
 // 商品搜索功能
 // ================================
 let searchResultsData = [];
@@ -11020,6 +11770,10 @@ function createItemCard(item) {
                     <i class="bi bi-person me-1"></i>
                     ${escapeHtml(item.seller_name)}
                 </div>
+                ${item.publish_time && item.publish_time !== '未知时间' ? `<div class="publish-time mb-2" style="color: #95a5a6; font-size: 0.85em;">
+                    <i class="bi bi-clock me-1"></i>
+                    ${escapeHtml(item.publish_time)}
+                </div>` : ''}
                 ${wantCount > 0 ? `<div class="want-count mb-2">
                     <i class="bi bi-heart-fill me-1" style="color: #ff6b6b;"></i>
                     <span class="badge bg-danger">${wantCount}人想要</span>

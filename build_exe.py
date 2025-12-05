@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-闲鱼自动回复系统 - EXE打包脚本
+闲鱼秒拍监控系统 - EXE打包脚本
 
 使用方法:
     python build_exe.py
@@ -317,9 +317,9 @@ def create_launcher_script():
     # 创建批处理启动脚本
     bat_content = """@echo off
 chcp 65001 >nul
-title 闲鱼自动回复系统
+title 闲鱼秒拍监控系统
 echo ========================================
-echo   闲鱼自动回复系统
+echo   闲鱼秒拍监控系统
 echo ========================================
 echo.
 echo 正在启动...
@@ -343,7 +343,7 @@ pause
 def main():
     """主函数"""
     print("\n" + "="*60)
-    print("  闲鱼自动回复系统 - EXE打包工具")
+    print("  闲鱼秒拍监控系统 - EXE打包工具")
     print("="*60)
     
     # 1. 检查依赖

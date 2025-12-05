@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 简单的用户统计服务器
-只统计有多少人在使用闲鱼自动回复系统
+只统计有多少人在使用闲鱼秒拍监控系统
 """
 
 from fastapi import FastAPI
@@ -13,7 +13,7 @@ from datetime import datetime
 import uvicorn
 from pathlib import Path
 
-app = FastAPI(title="闲鱼自动回复系统用户统计", version="1.0.0")
+app = FastAPI(title="闲鱼秒拍监控系统用户统计", version="1.0.0")
 
 # 数据库文件路径
 DB_PATH = Path(__file__).parent / "data" / "user_stats.db"
@@ -211,7 +211,7 @@ async def get_recent_users():
 async def root():
     """根路径"""
     return {
-        "message": "闲鱼自动回复系统用户统计服务器",
+        "message": "闲鱼秒拍监控系统用户统计服务器",
         "description": "只统计有多少人在使用这个系统",
         "endpoints": {
             "POST /statistics": "接收用户统计数据",

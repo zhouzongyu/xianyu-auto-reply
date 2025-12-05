@@ -1,4 +1,4 @@
-# 🐟 闲鱼自动回复系统
+# 🐟 闲鱼秒拍监控系统
 
 [![GitHub](https://img.shields.io/badge/GitHub-zhinianboke%2Fxianyu--auto--reply-blue?logo=github)](https://github.com/zhinianboke/xianyu-auto-reply)
 [![Docker](https://img.shields.io/badge/Docker-一键部署-blue?logo=docker)](https://github.com/zhinianboke/xianyu-auto-reply#-快速开始)
@@ -12,7 +12,7 @@
 
 ## 📋 项目概述
 
-一个功能完整的闲鱼自动回复和管理系统，采用现代化的技术架构，支持多用户、多账号管理，具备智能回复、自动发货、自动确认发货、商品管理等企业级功能。系统基于Python异步编程，使用FastAPI提供RESTful API，SQLite数据库存储，支持Docker一键部署。
+一个功能完整的闲鱼秒拍监控系统，采用现代化的技术架构，支持多用户、多账号管理，具备智能回复、自动发货、自动确认发货、商品管理等企业级功能。系统基于Python异步编程，使用FastAPI提供RESTful API，SQLite数据库存储，支持Docker一键部署。
 
 > **⚠️ 重要提示：本项目仅供学习研究使用，严禁商业用途！使用前请仔细阅读[版权声明](#️-版权声明与使用条款)。**
 
@@ -1137,7 +1137,7 @@ python test_php_stats.py
 
 ---
 
-🎉 **开始使用闲鱼自动回复系统，让您的闲鱼店铺管理更加智能高效！**
+🎉 **开始使用闲鱼秒拍监控系统，让您的闲鱼店铺管理更加智能高效！**
 
 **⚠️ 重要提醒：本项目仅供学习研究使用，严禁商业用途！**
 
