@@ -16,7 +16,7 @@ from config import (
     WEBSOCKET_URL, HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT,
     TOKEN_REFRESH_INTERVAL, TOKEN_RETRY_INTERVAL, COOKIES_STR,
     LOG_CONFIG, AUTO_REPLY, DEFAULT_HEADERS, WEBSOCKET_HEADERS,
-    APP_CONFIG, API_ENDPOINTS
+    APP_CONFIG, API_ENDPOINTS, YIFAN_API
 )
 import sys
 import aiohttp
@@ -726,10 +726,14 @@ class XianyuLive:
         self.message_semaphore = asyncio.Semaphore(100)  # 最多100个并发消息处理任务
         self.active_message_tasks = 0  # 当前活跃的消息处理任务数
 
+        # 亦凡卡劵账号充值确认流程状态管理
+        self.yifan_account_waiting = {}  # 等待账号输入的订单: {chat_id: {buyer_id, rule, order_id, item_id, state, account, create_time}}
+        self.yifan_account_lock = asyncio.Lock()  # 状态管理锁
+
         # 消息防抖管理器：用于处理用户连续发送消息的情况
         # {chat_id: {'task': asyncio.Task, 'last_message': dict, 'timer': float}}
         self.message_debounce_tasks = {}  # 存储每个chat_id的防抖任务
-        self.message_debounce_delay = 1  # 防抖延迟时间（秒）：用户停止发送消息1秒后才回复
+        self.message_debounce_delay = 3  # 防抖延迟时间（秒）：用户停止发送消息1秒后才回复
         self.message_debounce_lock = asyncio.Lock()  # 防抖任务管理的锁
         
         # 消息去重机制：防止同一条消息被处理多次
@@ -1189,7 +1193,7 @@ class XianyuLive:
                     for i in range(quantity_to_send):
                         try:
                             # 每次调用都可能获取不同的内容（API卡券、批量数据等）
-                            delivery_content = await self._auto_delivery(item_id, item_title, order_id, send_user_id)
+                            delivery_content = await self._auto_delivery(item_id, item_title, order_id, send_user_id, chat_id)
                             if delivery_content:
                                 delivery_contents.append(delivery_content)
                                 success_count += 1
@@ -1994,13 +1998,17 @@ class XianyuLive:
                 await self.update_config_cookies()
                 logger.info(f"【{self.cookie_id}】数据库cookies更新成功")
 
+                # ⚠️ 在重启前完成所有需要的操作（如发送通知）
+                # 因为重启触发后2秒内任务会被取消，不能再执行任何async操作
+                logger.info(f"【{self.cookie_id}】cookies更新成功，准备重启任务...")
+                
                 # 通过CookieManager重启任务
-                logger.info(f"【{self.cookie_id}】通过CookieManager重启任务...")
+                logger.info(f"【{self.cookie_id}】通过CookieManager触发重启...")
                 await self._restart_instance()
                 
                 # ⚠️ _restart_instance() 已触发重启，当前任务即将被取消
-                # 立即返回，不执行后续代码
-                logger.info(f"【{self.cookie_id}】cookies更新成功，重启请求已触发")
+                # 立即返回，不执行任何后续代码（包括发送通知）
+                logger.info(f"【{self.cookie_id}】重启请求已触发，等待任务被取消...")
                 return True
 
             except Exception as update_e:
@@ -2179,16 +2187,22 @@ class XianyuLive:
                 XianyuLive._last_password_login_time[self.cookie_id] = time.time()
                 logger.warning(f"【{self.cookie_id}】已记录密码登录时间，冷却期 {XianyuLive._password_login_cooldown} 秒")
                 
+                # ⚠️ 先发送通知，再更新cookies并重启任务
+                # 因为重启后当前任务会被取消，不能在重启后发送通知
+                try:
+                    await self.send_token_refresh_notification(
+                        f"账号密码登录成功，Cookie已获取，准备更新并重启",
+                        "password_login_success"
+                    )
+                except Exception as notify_e:
+                    logger.warning(f"【{self.cookie_id}】发送通知失败: {self._safe_str(notify_e)}")
+                
                 # 更新cookies并重启任务
                 update_success = await self._update_cookies_and_restart(new_cookies_str)
                 
                 if update_success:
                     logger.info(f"【{self.cookie_id}】Cookie更新并重启任务成功")
-                    # 发送账号密码登录成功通知
-                    await self.send_token_refresh_notification(
-                        f"账号密码登录成功，Cookie已更新，任务已重启",
-                        "password_login_success"
-                    )
+                    # ⚠️ 不要在这里发送通知，因为重启已触发，任务即将被取消
                     return True
                 else:
                     logger.error(f"【{self.cookie_id}】Cookie更新失败")
@@ -2407,9 +2421,10 @@ class XianyuLive:
                 def trigger_restart():
                     """在后台线程中触发重启，不阻塞当前任务"""
                     try:
-                        # 给当前任务一点时间完成清理（避免竞态条件）
+                        # 给当前任务足够时间完成清理和退出（避免竞态条件）
+                        # 增加到2秒，确保任务有足够时间处理返回和清理
                         import time
-                        time.sleep(0.5)
+                        time.sleep(2.0)
                         
                         # save_to_db=False 因为 update_config_cookies 已经保存过了
                         cookie_manager.update_cookie(self.cookie_id, self.cookies_str, save_to_db=False)
@@ -2424,7 +2439,7 @@ class XianyuLive:
                 restart_thread.start()
                 
                 logger.info(f"【{self.cookie_id}】实例重启已触发，当前任务即将退出...")
-                logger.warning(f"【{self.cookie_id}】注意：重启请求已发送，CookieManager将在0.5秒后取消当前任务并启动新实例")
+                logger.warning(f"【{self.cookie_id}】注意：重启请求已发送，CookieManager将在2秒后取消当前任务并启动新实例")
                     
             else:
                 logger.warning(f"【{self.cookie_id}】CookieManager不可用，无法重启实例")
@@ -2664,14 +2679,17 @@ class XianyuLive:
                 ])
 
             browser = await playwright.chromium.launch(
-                headless=True,
+                headless=True,  # 移动模式使用无头模式
                 args=browser_args
             )
 
-            # 创建浏览器上下文
+            # 创建移动设备浏览器上下文（模拟iPhone）
             context = await browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
+                viewport={'width': 375, 'height': 812},  # iPhone X/11/12 尺寸
+                user_agent='Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 AliApp(TB/11.15.0)',
+                device_scale_factor=3,  # iPhone 的屏幕缩放比例
+                is_mobile=True,
+                has_touch=True
             )
 
             # 设置Cookie
@@ -2687,33 +2705,56 @@ class XianyuLive:
                     })
 
             await context.add_cookies(cookies)
-            logger.warning(f"已设置 {len(cookies)} 个Cookie")
+            logger.info(f"已设置 {len(cookies)} 个Cookie（移动模式）")
 
             # 创建页面
             page = await context.new_page()
 
-            # 构造商品详情页面URL
-            item_url = f"https://www.goofish.com/item?id={item_id}"
-            logger.info(f"访问商品页面: {item_url}")
+            # 构造移动版商品详情页面URL
+            item_url = f"https://h5.m.goofish.com/item?id={item_id}"
+            logger.info(f"访问移动版商品页面: {item_url}")
 
             # 访问页面
             await page.goto(item_url, wait_until='networkidle', timeout=30000)
 
             # 等待页面完全加载
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
 
             # 获取商品详情内容
             detail_text = ""
             try:
-                # 等待目标元素出现
-                await page.wait_for_selector('.desc--GaIUKUQY', timeout=10000)
-
-                # 获取商品详情文本
-                detail_element = await page.query_selector('.desc--GaIUKUQY')
-                if detail_element:
-                    detail_text = await detail_element.inner_text()
-                    logger.info(f"成功获取商品详情: {item_id}, 长度: {len(detail_text)}")
-                    return detail_text.strip()
+                # 移动版页面选择器列表（按优先级排序）
+                selectors = [
+                    '.detailDesc--descText--1FMDTCm',  # 移动版商品详情主选择器
+                    'span.rax-text-v2.detailDesc--descText--1FMDTCm',  # 完整选择器
+                    '[class*="detailDesc--descText"]',  # 匹配包含detailDesc--descText的类名
+                    '[class*="descText"]',  # 匹配包含descText的类名
+                    '.desc--GaIUKUQY',  # PC版选择器（备用）
+                    '.detail-desc',     # 常见的详情选择器
+                    '.item-desc',       # 商品描述
+                    '[class*="desc"]',  # 包含desc的类名
+                ]
+                
+                for selector in selectors:
+                    try:
+                        # 尝试等待元素出现（短超时）
+                        await page.wait_for_selector(selector, timeout=3000)
+                        detail_element = await page.query_selector(selector)
+                        if detail_element:
+                            detail_text = await detail_element.inner_text()
+                            if detail_text and len(detail_text.strip()) > 0:
+                                logger.info(f"成功获取商品详情（选择器: {selector}）: {item_id}, 长度: {len(detail_text)}")
+                                return detail_text.strip()
+                    except Exception as e:
+                        logger.debug(f"选择器 {selector} 未找到: {self._safe_str(e)}")
+                        continue
+                
+                # 如果所有选择器都失败，尝试获取整个页面的文本内容
+                logger.warning(f"未找到特定详情元素，尝试获取整个页面内容: {item_id}")
+                body_text = await page.inner_text('body')
+                if body_text:
+                    logger.info(f"获取到页面整体内容: {item_id}, 长度: {len(body_text)}")
+                    return body_text.strip()
                 else:
                     logger.warning(f"未找到商品详情元素: {item_id}")
 
@@ -2751,8 +2792,9 @@ class XianyuLive:
         try:
             from db_manager import db_manager
 
-            # 准备批量数据
-            batch_data = []
+            # 准备批量数据，区分新商品和需要更新的商品
+            batch_new_data = []  # 新商品，保存所有信息
+            batch_update_data = []  # 已有商品，只更新标题和价格
             items_need_detail = []  # 需要获取详情的商品列表
 
             for item in items_list:
@@ -2776,46 +2818,63 @@ class XianyuLive:
                     'card_type': item.get('card_type', 0)
                 }
 
-                # 检查数据库中是否已有详情
+                # 检查数据库中是否已有该商品
                 existing_item = db_manager.get_item_info(self.cookie_id, item_id)
-                has_detail = existing_item and existing_item.get('item_detail') and existing_item['item_detail'].strip()
-
-                batch_data.append({
-                    'cookie_id': self.cookie_id,
-                    'item_id': item_id,
-                    'item_title': item.get('title', ''),
-                    'item_description': '',  # 暂时为空
-                    'item_category': str(item.get('category_id', '')),
-                    'item_price': item.get('price_text', ''),
-                    'item_detail': json.dumps(item_detail, ensure_ascii=False)
-                })
-
-                # 如果没有详情，添加到需要获取详情的列表
-                if not has_detail:
+                
+                if existing_item:
+                    # 商品已存在，只更新标题和价格，不更新商品详情
+                    batch_update_data.append({
+                        'cookie_id': self.cookie_id,
+                        'item_id': item_id,
+                        'item_title': item.get('title', ''),
+                        'item_price': item.get('price_text', ''),
+                        'item_category': str(item.get('category_id', ''))
+                    })
+                    logger.debug(f"商品 {item_id} 已存在，将更新标题和价格")
+                else:
+                    # 新商品，保存所有信息
+                    batch_new_data.append({
+                        'cookie_id': self.cookie_id,
+                        'item_id': item_id,
+                        'item_title': item.get('title', ''),
+                        'item_description': '',  # 暂时为空
+                        'item_category': str(item.get('category_id', '')),
+                        'item_price': item.get('price_text', ''),
+                        'item_detail': json.dumps(item_detail, ensure_ascii=False)
+                    })
+                    
+                    # 新商品需要获取详情
                     items_need_detail.append({
                         'item_id': item_id,
                         'item_title': item.get('title', '')
                     })
+                    logger.debug(f"商品 {item_id} 是新商品，将保存完整信息")
 
-            if not batch_data:
-                logger.info("没有有效的商品数据需要保存")
-                return 0
+            saved_count = 0
+            
+            # 保存新商品
+            if batch_new_data:
+                new_count = db_manager.batch_save_item_basic_info(batch_new_data)
+                logger.info(f"新增商品信息: {new_count}/{len(batch_new_data)} 个")
+                saved_count += new_count
+            
+            # 更新已有商品的标题和价格
+            if batch_update_data:
+                update_count = db_manager.batch_update_item_title_price(batch_update_data)
+                logger.info(f"更新商品标题和价格: {update_count}/{len(batch_update_data)} 个")
+                saved_count += update_count
 
-            # 使用批量保存方法（并发安全）
-            saved_count = db_manager.batch_save_item_basic_info(batch_data)
-            logger.info(f"批量保存商品信息完成: {saved_count}/{len(batch_data)} 个商品")
-
-            # 异步获取缺失的商品详情
+            # 异步获取缺失的商品详情（仅新商品）
             if items_need_detail:
                 from config import config
                 auto_fetch_config = config.get('ITEM_DETAIL', {}).get('auto_fetch', {})
 
                 if auto_fetch_config.get('enabled', True):
-                    logger.info(f"发现 {len(items_need_detail)} 个商品缺少详情，开始获取...")
+                    logger.info(f"发现 {len(items_need_detail)} 个新商品缺少详情，开始获取...")
                     detail_success_count = await self._fetch_missing_item_details(items_need_detail)
                     logger.info(f"成功获取 {detail_success_count}/{len(items_need_detail)} 个商品的详情")
                 else:
-                    logger.info(f"发现 {len(items_need_detail)} 个商品缺少详情，但自动获取功能已禁用")
+                    logger.info(f"发现 {len(items_need_detail)} 个新商品缺少详情，但自动获取功能已禁用")
 
             return saved_count
 
@@ -4483,7 +4542,7 @@ class XianyuLive:
                 logger.error(f"【{self.cookie_id}】获取订单详情异常: {self._safe_str(e)}")
                 return None
 
-    async def _auto_delivery(self, item_id: str, item_title: str = None, order_id: str = None, send_user_id: str = None):
+    async def _auto_delivery(self, item_id: str, item_title: str = None, order_id: str = None, send_user_id: str = None, chat_id: str = None):
         """自动发货功能 - 获取卡券规则，执行延时，确认发货，发送内容"""
         try:
             from db_manager import db_manager
@@ -4718,6 +4777,10 @@ class XianyuLive:
                     # API类型：调用API获取内容，传入订单和商品信息用于动态参数替换
                     delivery_content = await self._get_api_card_content(rule, order_id, item_id, send_user_id, spec_name, spec_value)
 
+                elif rule['card_type'] == 'yifan_api':
+                    # 亦凡卡劵API类型：调用亦凡API获取内容
+                    delivery_content = await self._get_yifan_api_card_content(rule, order_id, item_id, send_user_id, chat_id)
+
                 elif rule['card_type'] == 'text':
                     # 固定文字类型：直接使用文字内容
                     delivery_content = rule['text_content']
@@ -4886,6 +4949,310 @@ class XianyuLive:
             logger.error(f"API调用异常: {self._safe_str(e)}")
             return None
 
+    async def _get_yifan_api_card_content(self, rule, order_id=None, item_id=None, buyer_id=None, chat_id=None):
+        """调用亦凡卡劵API获取内容"""
+        try:
+            import hashlib
+            import time
+            import aiohttp
+            import json
+            from urllib.parse import urlencode
+
+            # 获取API配置（存储在api_config字段中）
+            api_config = rule.get('api_config')
+            if not api_config:
+                logger.error(f"亦凡API配置为空，规则ID: {rule.get('id')}, 卡券名称: {rule.get('card_name')}")
+                return None
+
+            # 解析API配置
+            if isinstance(api_config, str):
+                api_config = json.loads(api_config)
+
+            # 亦凡API配置直接存储在api_config字段中
+            user_id = api_config.get('user_id')
+            user_key = api_config.get('user_key')
+            goods_id = api_config.get('goods_id')
+            # 回调地址：优先使用卡券配置中的，如果没有则从全局配置读取，最后使用默认地址
+            callback_url = (api_config.get('callback_url') or '').strip() or (YIFAN_API.get('callback_url') or '').strip() or 'http://116.196.116.76/yifan.php'
+            require_account = api_config.get('require_account', False)
+
+            if not user_id or not user_key or not goods_id:
+                logger.error(f"亦凡API配置不完整，规则ID: {rule.get('id')}")
+                return None
+
+            # 如果需要充值账号，先进行账号询问和确认流程
+            recharge_account = None
+            if require_account:
+                logger.info(f"亦凡API需要充值账号，开始询问流程")
+                recharge_account = await self._ask_for_recharge_account(chat_id, buyer_id, rule, order_id, item_id)
+                if recharge_account == "__WAITING_ACCOUNT__":
+                    # 已设置等待状态，暂时中断发货流程
+                    logger.info(f"已设置等待账号输入状态，暂停发货流程")
+                    return None
+                elif not recharge_account:
+                    logger.error(f"获取充值账号失败，取消发货")
+                    return None
+                logger.info(f"获取到充值账号: {recharge_account}")
+
+            # 构建API请求参数（所有值都转换为字符串，避免空格问题）
+            timestamp = str(int(time.time()))
+            params = {
+                'userid': str(user_id),
+                'timestamp': timestamp,
+                'goodsid': str(goods_id),
+                'buynum': '1',
+            }
+
+            # 如果有回调地址，添加到参数中（签名之前添加）
+            if callback_url and callback_url.strip():
+                params['callbackurl'] = str(callback_url).strip()
+
+            # 如果有充值账号，添加到参数中
+            if recharge_account:
+                params['attach'] = str(recharge_account).strip()
+
+            # 生成签名（确保参数值没有空格）
+            # 1. 按照key的ascii码从小到大排序
+            # 2. 空值不参与签名
+            # 3. 使用QueryString格式拼接
+            # 4. 尾部追加商户KEY
+            # 5. MD5后转成32位小写
+            sign_params = {k: str(v).strip() for k, v in params.items() if v is not None and str(v).strip() != ''}
+            sorted_keys = sorted(sign_params.keys())
+            sign_string = '&'.join([f"{key}={sign_params[key]}" for key in sorted_keys])
+            sign_string += user_key
+            
+            logger.info(f"亦凡API签名字符串: {sign_string}")
+            
+            sign = hashlib.md5(sign_string.encode('utf-8')).hexdigest().lower()
+            params['sign'] = sign
+
+            logger.info(f"调用亦凡API: 商户ID={user_id}, 商品ID={goods_id}, 充值账号={recharge_account}, 回调URL={callback_url if callback_url else '无'}")
+
+            # 确保session存在
+            if not self.session:
+                await self.create_session()
+
+            # 发起API请求（使用data而不是json，发送form格式）
+            api_url = "http://price.78shuk.top/dockapiv3/order/create"
+            
+            timeout_obj = aiohttp.ClientTimeout(total=30)
+            async with self.session.post(api_url, data=params, timeout=timeout_obj) as response:
+                status_code = response.status
+                response_text = await response.text()
+
+                logger.info(f"亦凡API返回状态码: {status_code}, 响应: {response_text}")
+
+                if status_code == 200:
+                    try:
+                        result = json.loads(response_text)
+                        # 根据亦凡API的返回格式处理：code为1表示成功
+                        if result.get('code') == 1:
+                            # 提取订单信息
+                            data = result.get('data', {})
+                            order_no = data.get('orderno', '')
+                            us_order_no = data.get('usorderno', '')
+                            
+                            # 构建成功消息
+                            success_msg = f"✅ 自动发货订单已提交成功\n\n"
+                            success_msg += f"📋 订单信息：\n"
+                            success_msg += f"平台订单号: {order_no}\n"
+                            if us_order_no:
+                                success_msg += f"商家订单号: {us_order_no}\n"
+                            
+                            # 添加查询地址（从全局配置读取）
+                            query_url = YIFAN_API.get('query_url', 'http://116.196.116.76/yifan.php')
+                            success_msg += f"\n🔍 查询卡密：\n"
+                            success_msg += f"{query_url}\n"
+                            success_msg += f"(输入订单号查询)\n"
+                            
+                            # 添加提示信息
+                            success_msg += f"\n⏰ 温馨提示：\n"
+                            success_msg += f"订单处理需要一定时间，请耐心等待。\n"
+                            success_msg += f"如果1小时后仍未看到卡密信息，\n"
+                            success_msg += f"请联系客服处理。"
+                            
+                            logger.info(f"亦凡API调用成功: order_no={order_no}")
+                            
+                            # 将亦凡订单号记录到数据库（用于后续回调匹配）
+                            if order_id and order_no:
+                                try:
+                                    from db_manager import db_manager
+                                    # 更新订单的亦凡订单号和chat_id
+                                    db_manager.update_order_yifan_status(
+                                        order_id=order_id,
+                                        yifan_orderno=order_no,
+                                        delivery_status='processing'
+                                    )
+                                    if chat_id:
+                                        db_manager.update_order_chat_id(order_id, chat_id)
+                                    logger.info(f"已记录亦凡订单信息: order_id={order_id}, yifan_orderno={order_no}")
+                                except Exception as e:
+                                    logger.error(f"记录亦凡订单信息失败: {e}")
+                            
+                            return success_msg
+                        else:
+                            # code不为1，下单失败，需要通知用户
+                            error_msg = result.get('msg', '未知错误')
+                            logger.error(f"亦凡API调用失败: code={result.get('code')}, msg={error_msg}")
+                            
+                            # 发送通知给用户
+                            if chat_id and buyer_id:
+                                from db_manager import db_manager
+                                notification_msg = f"❌ 自动发货失败\n错误信息: {error_msg}\n请联系客服处理"
+                                await self.send_notification("系统", buyer_id, notification_msg, item_id or "unknown", chat_id)
+                            
+                            return None
+                    except Exception as e:
+                        logger.error(f"解析亦凡API返回失败: {self._safe_str(e)}")
+                        return None
+                else:
+                    logger.error(f"亦凡API调用失败: HTTP {status_code} - {response_text[:200]}")
+                    return None
+
+        except Exception as e:
+            logger.error(f"亦凡API调用异常: {self._safe_str(e)}")
+            return None
+
+    async def _call_yifan_api_with_account(self, rule, account, order_id=None, item_id=None, buyer_id=None, chat_id=None):
+        """使用确认的账号调用亦凡API"""
+        try:
+            import hashlib
+            import time
+            import aiohttp
+            import json
+
+            # 获取API配置
+            api_config = rule.get('api_config')
+            if not api_config:
+                logger.error(f"亦凡API配置为空")
+                return None
+
+            # 解析API配置
+            if isinstance(api_config, str):
+                api_config = json.loads(api_config)
+
+            # 亦凡API配置直接存储在api_config字段中
+            user_id = api_config.get('user_id')
+            user_key = api_config.get('user_key')
+            goods_id = api_config.get('goods_id')
+            callback_url = api_config.get('callback_url', '')
+
+            if not user_id or not user_key or not goods_id:
+                logger.error(f"亦凡API配置不完整")
+                return None
+
+            # 构建API请求参数（所有值都转换为字符串，避免空格问题）
+            timestamp = str(int(time.time()))
+            params = {
+                'userid': str(user_id),
+                'timestamp': timestamp,
+                'goodsid': str(goods_id),
+                'buynum': '1',
+                'attach': str(account).strip()  # 充值账号，去除首尾空格
+            }
+
+            # 如果有回调地址，添加到参数中（签名之前添加）
+            if callback_url and callback_url.strip():
+                params['callbackurl'] = str(callback_url).strip()
+
+            # 生成签名（确保参数值没有空格）
+            sign_params = {k: str(v).strip() for k, v in params.items() if v is not None and str(v).strip() != ''}
+            sorted_keys = sorted(sign_params.keys())
+            sign_string = '&'.join([f"{key}={sign_params[key]}" for key in sorted_keys])
+            sign_string += user_key
+            
+            logger.info(f"亦凡API签名字符串: {sign_string}")
+            
+            sign = hashlib.md5(sign_string.encode('utf-8')).hexdigest().lower()
+            params['sign'] = sign
+
+            logger.info(f"调用亦凡API: 商户ID={user_id}, 商品ID={goods_id}, 充值账号={account}, 回调URL={callback_url if callback_url else '无'}")
+
+            # 确保session存在
+            if not self.session:
+                await self.create_session()
+
+            # 发起API请求（使用data而不是json，发送form格式）
+            api_url = "http://price.78shuk.top/dockapiv3/order/create"
+            
+            timeout_obj = aiohttp.ClientTimeout(total=30)
+            async with self.session.post(api_url, data=params, timeout=timeout_obj) as response:
+                status_code = response.status
+                response_text = await response.text()
+
+                logger.info(f"亦凡API返回状态码: {status_code}, 响应: {response_text}")
+
+                if status_code == 200:
+                    try:
+                        result = json.loads(response_text)
+                        if result.get('code') == 1:
+                            # 下单成功
+                            data = result.get('data', {})
+                            order_no = data.get('orderno', '')
+                            us_order_no = data.get('usorderno', '')
+                            
+                            success_msg = f"✅ 下单成功\n"
+                            success_msg += f"订单号: {order_no}\n"
+                            if us_order_no:
+                                success_msg += f"用户订单号: {us_order_no}\n"
+                            success_msg += f"充值账号: {account}\n"
+                            success_msg += f"返回信息: {result.get('msg', '提交成功')}\n"
+                            success_msg += f"有任何问题，请及时联系客服处理。"
+                            
+                            logger.info(f"亦凡API调用成功: {success_msg}")
+                            return success_msg
+                        else:
+                            # 下单失败
+                            error_msg = result.get('msg', '未知错误')
+                            logger.error(f"亦凡API调用失败: code={result.get('code')}, msg={error_msg}")
+                            
+                            # 发送通知给用户
+                            if chat_id and buyer_id:
+                                from db_manager import db_manager
+                                notification_msg = f"❌ 自动发货失败\n错误信息: {error_msg}\n请联系客服处理"
+                                await self.send_notification("系统", buyer_id, notification_msg, item_id or "unknown", chat_id)
+                            
+                            return None
+                    except Exception as e:
+                        logger.error(f"解析亦凡API返回失败: {self._safe_str(e)}")
+                        return None
+                else:
+                    logger.error(f"亦凡API调用失败: HTTP {status_code} - {response_text[:200]}")
+                    return None
+
+        except Exception as e:
+            logger.error(f"亦凡API调用异常: {self._safe_str(e)}")
+            return None
+
+    async def _ask_for_recharge_account(self, chat_id, buyer_id, rule, order_id=None, item_id=None):
+        """询问客户充值账号并设置等待状态（不阻塞）"""
+        try:
+            async with self.yifan_account_lock:
+                # 设置等待状态
+                self.yifan_account_waiting[chat_id] = {
+                    'buyer_id': buyer_id,
+                    'rule': rule,
+                    'order_id': order_id,
+                    'item_id': item_id,
+                    'state': 'waiting_account',  # waiting_account 或 waiting_confirm
+                    'account': None,
+                    'create_time': time.time(),
+                    'retry_count': 0
+                }
+            
+            # 发送询问消息
+            ask_message = "请单独发送您的充值账号，不要有任何其他的文字。如果因为您输错的原因导致错误下单，概不退款。"
+            await self.send_msg(self.ws, chat_id, buyer_id, ask_message)
+            logger.info(f"已发送充值账号询问消息，等待用户回复")
+            
+            # 返回特殊标记，表示需要等待用户输入
+            return "__WAITING_ACCOUNT__"
+
+        except Exception as e:
+            logger.error(f"询问充值账号异常: {self._safe_str(e)}")
+            return None
+
     async def _replace_api_dynamic_params(self, params, order_id=None, item_id=None, buyer_id=None, spec_name=None, spec_value=None):
         """替换API请求参数中的动态参数"""
         try:
@@ -4935,6 +5302,7 @@ class XianyuLive:
                 'cookie_id': self.cookie_id or '',
                 'spec_name': spec_name or '',
                 'spec_value': spec_value or '',
+                'timestamp': str(int(time.time())),
             }
 
             # 从订单信息中提取参数
@@ -7438,6 +7806,127 @@ class XianyuLive:
             else:
                 logger.info(f"[{msg_time}] 【收到】用户: {send_user_name} (ID: {send_user_id}), 商品({item_id}): {send_message}")
 
+                # 【优先处理】检查是否正在等待亦凡卡劵账号输入
+                async with self.yifan_account_lock:
+                    if chat_id in self.yifan_account_waiting:
+                        waiting_info = self.yifan_account_waiting[chat_id]
+                        
+                        # 检查超时（30分钟）
+                        if time.time() - waiting_info['create_time'] > 1800:
+                            logger.warning(f"账号输入等待超时，清除等待状态")
+                            del self.yifan_account_waiting[chat_id]
+                        elif waiting_info['buyer_id'] == send_user_id:
+                            # 检查是否为客户真实消息（过滤系统消息）
+                            # 真实客户消息: message['1']['7'] = 2, contentType = 1
+                            # 系统消息: message['1']['7'] = 1, contentType = 6 (textCard)
+                            message_1 = message.get('1', {})
+                            message_direction = message_1.get('7', 0) if isinstance(message_1, dict) else 0
+                            
+                            # 获取contentType
+                            content_type = 0
+                            try:
+                                message_6 = message_1.get('6', {})
+                                if isinstance(message_6, dict):
+                                    message_6_3 = message_6.get('3', {})
+                                    if isinstance(message_6_3, dict):
+                                        content_type = message_6_3.get('4', 0)
+                            except:
+                                pass
+                            
+                            # 检查bizTag是否包含系统消息标识
+                            is_system_msg = False
+                            try:
+                                message_10 = message_1.get('10', {})
+                                if isinstance(message_10, dict):
+                                    biz_tag = message_10.get('bizTag', '')
+                                    if biz_tag and ('SECURITY' in biz_tag or 'taskName' in biz_tag or 'taskId' in biz_tag):
+                                        is_system_msg = True
+                            except:
+                                pass
+                            
+                            # 过滤非真实客户消息：
+                            # 1. message['1']['7'] != 2 表示不是接收的消息
+                            # 2. contentType = 6 表示系统卡片消息
+                            # 3. bizTag包含系统标识
+                            if message_direction != 2 or content_type == 6 or is_system_msg:
+                                logger.info(f"收到系统消息，跳过账号确认处理（direction={message_direction}, contentType={content_type}, isSystem={is_system_msg}）")
+                                return
+                            
+                            # 是同一个用户的真实回复
+                            if waiting_info['state'] == 'waiting_account':
+                                # 等待账号输入阶段
+                                account = send_message.strip()
+                                if account:
+                                    # 保存账号并发送确认消息
+                                    waiting_info['account'] = account
+                                    waiting_info['state'] = 'waiting_confirm'
+                                    
+                                    confirm_msg = f"{account}\n这是您要充值的账号，请回答\"是\"，进行确认下单，如果账号不对，请重新输入正确的账号，如果因为您账号输错，导致错误下单，概不退款。"
+                                    await self.send_msg(self.ws, chat_id, send_user_id, confirm_msg)
+                                    logger.info(f"已保存充值账号: {account}，等待用户确认")
+                                    return  # 处理完毕，不再继续其他流程
+                                    
+                            elif waiting_info['state'] == 'waiting_confirm':
+                                # 等待确认阶段
+                                user_reply = send_message.strip()
+                                
+                                if user_reply == '是':
+                                    # 用户确认，继续发货流程
+                                    logger.info(f"用户确认账号，继续亦凡API发货流程")
+                                    account = waiting_info['account']
+                                    rule = waiting_info['rule']
+                                    order_id_saved = waiting_info.get('order_id')
+                                    item_id_saved = waiting_info.get('item_id')
+                                    
+                                    # 清除等待状态
+                                    del self.yifan_account_waiting[chat_id]
+                                    
+                                    # 继续执行亦凡API调用（带账号）
+                                    try:
+                                        # 直接调用亦凡API下单
+                                        delivery_content = await self._call_yifan_api_with_account(
+                                            rule, account, order_id_saved, item_id_saved, send_user_id, chat_id
+                                        )
+                                        
+                                        if delivery_content:
+                                            # 发送卡劵内容给用户
+                                            final_content = self._process_delivery_content_with_description(
+                                                delivery_content, rule.get('card_description', '')
+                                            )
+                                            await self.send_msg(self.ws, chat_id, send_user_id, final_content)
+                                            
+                                            # 增加发货次数统计
+                                            from db_manager import db_manager
+                                            db_manager.increment_delivery_times(rule['id'])
+                                            logger.info(f"亦凡API自动发货成功")
+                                        else:
+                                            # 发货失败通知
+                                            await self.send_msg(self.ws, chat_id, send_user_id, "抱歉，自动发货失败，请联系客服处理。")
+                                    except Exception as e:
+                                        logger.error(f"亦凡API发货异常: {self._safe_str(e)}")
+                                        await self.send_msg(self.ws, chat_id, send_user_id, "系统异常，请联系客服处理。")
+                                    
+                                    return  # 处理完毕
+                                    
+                                else:
+                                    # 用户输入的不是"是"，认为是重新输入账号
+                                    new_account = user_reply
+                                    if new_account:
+                                        waiting_info['account'] = new_account
+                                        waiting_info['retry_count'] += 1
+                                        
+                                        # 检查重试次数
+                                        if waiting_info['retry_count'] >= 5:
+                                            logger.warning(f"账号确认重试次数过多，取消发货")
+                                            del self.yifan_account_waiting[chat_id]
+                                            await self.send_msg(self.ws, chat_id, send_user_id, "账号确认失败次数过多，已取消发货，请重新下单。")
+                                            return
+                                        
+                                        confirm_msg = f"{new_account}\n这是您要充值的账号，请回答\"是\"，进行确认下单，如果账号不对，请重新输入正确的账号，如果因为您账号输错，导致错误下单，概不退款。"
+                                        await self.send_msg(self.ws, chat_id, send_user_id, confirm_msg)
+                                        logger.info(f"用户重新输入账号: {new_account}，再次等待确认")
+                                        return
+
                 # 🔔 立即发送消息通知（独立于自动回复功能）
                 # 检查是否为群组消息，如果是群组消息则跳过通知
                 try:
@@ -7529,9 +8018,19 @@ class XianyuLive:
             elif send_message == '已发货':
                 logger.info(f'[{msg_time}] 【{self.cookie_id}】发货确认消息不处理')
                 return
+            elif send_message == '[注意！小心假客服骗钱！]':
+                logger.info(f'[{msg_time}] 【{self.cookie_id}】系统警告消息不处理')
+                return
+            elif send_message == '订单已签收':
+                logger.info(f'[{msg_time}] 【{self.cookie_id}】签收消息不处理')
+                return
             # 【重要】检查是否为自动发货触发消息 - 即使在人工接入暂停期间也要处理
             elif self._is_auto_delivery_trigger(send_message):
                 logger.info(f'[{msg_time}] 【{self.cookie_id}】检测到自动发货触发消息，即使在暂停期间也继续处理: {send_message}')
+                # 检查是否启用自动确认发货
+                if not self.is_auto_confirm_enabled():
+                    logger.info(f'[{msg_time}] 【{self.cookie_id}】未启用自动确认发货，跳过自动发货')
+                    return
                 # 使用统一的自动发货处理方法
                 await self._handle_auto_delivery(websocket, message, send_user_name, send_user_id,
                                                item_id, chat_id, msg_time)
@@ -7563,6 +8062,11 @@ class XianyuLive:
                     # 检查是否为"我已小刀，待刀成"
                     if card_title == "我已小刀，待刀成":
                         logger.info(f'[{msg_time}] 【{self.cookie_id}】【系统】检测到"我已小刀，待刀成"，即使在暂停期间也继续处理')
+                        
+                        # 检查是否启用自动确认发货
+                        if not self.is_auto_confirm_enabled():
+                            logger.info(f'[{msg_time}] 【{self.cookie_id}】未启用自动确认发货，跳过自动小刀和自动发货')
+                            return
 
                         # 检查商品是否属于当前cookies
                         if item_id and item_id != "未知商品":
@@ -7818,7 +8322,7 @@ class XianyuLive:
                         # 触发重启（不等待完成）
                         await self._restart_instance()
                         
-                        # ⚠️ 重要：_restart_instance() 已触发重启，0.5秒后当前任务会被取消
+                        # ⚠️ 重要：_restart_instance() 已触发重启，2秒后当前任务会被取消
                         # 不要在这里等待或执行其他操作，让任务自然退出
                         logger.info(f"【{self.cookie_id}】重启请求已触发，主程序即将退出，新实例将自动启动")
                         return  # 退出当前连接循环，等待被取消

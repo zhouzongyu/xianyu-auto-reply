@@ -358,44 +358,9 @@ async def log_requests(request, call_next):
 
 # 提供前端静态文件
 import os
-import sys
-
-# 获取静态文件目录，支持打包后的exe环境
-def get_static_dir():
-    """获取静态文件目录路径，支持打包后的exe环境"""
-    # 1. 如果是打包后的exe，从临时目录或exe目录查找
-    if getattr(sys, 'frozen', False):
-        # 先检查exe同目录
-        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
-        exe_static = os.path.join(exe_dir, 'static')
-        if os.path.exists(exe_static) and os.path.isfile(os.path.join(exe_static, 'index.html')):
-            logger.info(f"找到exe目录的static: {exe_static}")
-            return exe_static
-        
-        # 再检查临时目录
-        if hasattr(sys, '_MEIPASS'):
-            temp_static = os.path.join(os.path.abspath(sys._MEIPASS), 'static')
-            if os.path.exists(temp_static) and os.path.isfile(os.path.join(temp_static, 'index.html')):
-                logger.info(f"找到临时目录的static: {temp_static}")
-                return temp_static
-    
-    # 2. 开发环境：使用文件所在目录
-    default_static = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
-    if not os.path.exists(default_static):
-        os.makedirs(default_static, exist_ok=True)
-        logger.warning(f"静态文件目录不存在，已创建: {default_static}")
-    
-    return default_static
-
-static_dir = get_static_dir()
-logger.info(f"使用静态文件目录: {static_dir}")
-
-# 检查静态文件是否完整
-if not os.path.exists(os.path.join(static_dir, 'index.html')):
-    logger.error(f"⚠️ 警告: 静态文件目录不完整！缺少 index.html")
-    logger.error(f"静态文件目录: {static_dir}")
-else:
-    logger.info(f"✓ 静态文件检查通过: {static_dir}/index.html")
+static_dir = os.path.join(os.path.dirname(__file__), 'static')
+if not os.path.exists(static_dir):
+    os.makedirs(static_dir, exist_ok=True)
 
 app.mount('/static', StaticFiles(directory=static_dir), name='static')
 
@@ -2527,7 +2492,7 @@ def create_notification_channel(channel_data: NotificationChannelIn, current_use
 
 
 @app.get('/notification-channels/{channel_id}')
-def get_notification_channel(channel_id: int, _: None = Depends(require_auth)):
+def get_notification_channel(channel_id: int, current_user: Dict[str, Any] = Depends(get_current_user)):
     """获取指定通知渠道"""
     from db_manager import db_manager
     try:
@@ -2542,7 +2507,7 @@ def get_notification_channel(channel_id: int, _: None = Depends(require_auth)):
 
 
 @app.put('/notification-channels/{channel_id}')
-def update_notification_channel(channel_id: int, channel_data: NotificationChannelUpdate, _: None = Depends(require_auth)):
+def update_notification_channel(channel_id: int, channel_data: NotificationChannelUpdate, current_user: Dict[str, Any] = Depends(get_current_user)):
     """更新通知渠道"""
     from db_manager import db_manager
     try:
@@ -2563,7 +2528,7 @@ def update_notification_channel(channel_id: int, channel_data: NotificationChann
 
 
 @app.delete('/notification-channels/{channel_id}')
-def delete_notification_channel(channel_id: int, _: None = Depends(require_auth)):
+def delete_notification_channel(channel_id: int, current_user: Dict[str, Any] = Depends(get_current_user)):
     """删除通知渠道"""
     from db_manager import db_manager
     try:
@@ -2645,7 +2610,7 @@ def set_message_notification(cid: str, notification_data: MessageNotificationIn,
 
 
 @app.delete('/message-notifications/account/{cid}')
-def delete_account_notifications(cid: str, _: None = Depends(require_auth)):
+def delete_account_notifications(cid: str, current_user: Dict[str, Any] = Depends(get_current_user)):
     """删除账号的所有消息通知配置"""
     from db_manager import db_manager
     try:
@@ -2661,7 +2626,7 @@ def delete_account_notifications(cid: str, _: None = Depends(require_auth)):
 
 
 @app.delete('/message-notifications/{notification_id}')
-def delete_message_notification(notification_id: int, _: None = Depends(require_auth)):
+def delete_message_notification(notification_id: int, current_user: Dict[str, Any] = Depends(get_current_user)):
     """删除消息通知配置"""
     from db_manager import db_manager
     try:
@@ -2679,7 +2644,7 @@ def delete_message_notification(notification_id: int, _: None = Depends(require_
 # ------------------------- 系统设置接口 -------------------------
 
 @app.get('/system-settings')
-def get_system_settings(_: None = Depends(require_auth)):
+def get_system_settings(current_user: Dict[str, Any] = Depends(get_current_user)):
     """获取系统设置（排除敏感信息）"""
     from db_manager import db_manager
     try:
@@ -2696,7 +2661,7 @@ def get_system_settings(_: None = Depends(require_auth)):
 
 
 @app.put('/system-settings/{key}')
-def update_system_setting(key: str, setting_data: SystemSettingIn, _: None = Depends(require_auth)):
+def update_system_setting(key: str, setting_data: SystemSettingIn, current_user: Dict[str, Any] = Depends(get_current_user)):
     """更新系统设置"""
     from db_manager import db_manager
     try:
@@ -3103,7 +3068,8 @@ def get_keywords_with_item_id(cid: str, current_user: Dict[str, Any] = Depends(g
             "reply": keyword_data['reply'],
             "item_id": keyword_data['item_id'] or "",
             "type": keyword_data['type'],
-            "image_url": keyword_data['image_url']
+            "image_url": keyword_data['image_url'],
+            "item_title": keyword_data.get('item_title', '')  # 添加商品名称
         })
 
     return result
@@ -3707,7 +3673,7 @@ def get_card(card_id: int, current_user: Dict[str, Any] = Depends(get_current_us
 
 
 @app.put("/cards/{card_id}")
-def update_card(card_id: int, card_data: dict, _: None = Depends(require_auth)):
+def update_card(card_id: int, card_data: dict, current_user: Dict[str, Any] = Depends(get_current_user)):
     """更新卡券"""
     try:
         from db_manager import db_manager
@@ -3881,7 +3847,7 @@ def update_delivery_rule(rule_id: int, rule_data: dict, current_user: Dict[str, 
 
 
 @app.delete("/cards/{card_id}")
-def delete_card(card_id: int, _: None = Depends(require_auth)):
+def delete_card(card_id: int, current_user: Dict[str, Any] = Depends(get_current_user)):
     """删除卡券"""
     try:
         from db_manager import db_manager
@@ -3975,7 +3941,7 @@ def import_backup(file: UploadFile = File(...), current_user: Dict[str, Any] = D
 
 
 @app.post("/system/reload-cache")
-def reload_cache(_: None = Depends(require_auth)):
+def reload_cache(current_user: Dict[str, Any] = Depends(get_current_user)):
     """重新加载系统缓存（用于手动刷新数据）"""
     try:
         import cookie_manager
@@ -4292,7 +4258,7 @@ class AIReplySettings(BaseModel):
 @app.delete("/items/batch")
 def batch_delete_items(
     request: BatchDeleteRequest,
-    _: None = Depends(require_auth)
+    current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """批量删除商品信息"""
     try:
@@ -4393,7 +4359,7 @@ def get_all_ai_reply_settings(current_user: Dict[str, Any] = Depends(get_current
 
 
 @app.post("/ai-reply-test/{cookie_id}")
-def test_ai_reply(cookie_id: str, test_data: dict, _: None = Depends(require_auth)):
+def test_ai_reply(cookie_id: str, test_data: dict, current_user: Dict[str, Any] = Depends(get_current_user)):
     """测试AI回复功能"""
     try:
         # 检查账号是否存在
@@ -4440,7 +4406,7 @@ def test_ai_reply(cookie_id: str, test_data: dict, _: None = Depends(require_aut
 # ==================== 日志管理API ====================
 
 @app.get("/logs")
-async def get_logs(lines: int = 200, level: str = None, source: str = None, _: None = Depends(require_auth)):
+async def get_logs(lines: int = 200, level: str = None, source: str = None, current_user: Dict[str, Any] = Depends(get_current_user)):
     """获取实时系统日志"""
     try:
         # 获取文件日志收集器
@@ -4514,7 +4480,7 @@ async def delete_risk_control_log(
 
 
 @app.get("/logs/stats")
-async def get_log_stats(_: None = Depends(require_auth)):
+async def get_log_stats(current_user: Dict[str, Any] = Depends(get_current_user)):
     """获取日志统计信息"""
     try:
         collector = get_file_log_collector()
@@ -4527,7 +4493,7 @@ async def get_log_stats(_: None = Depends(require_auth)):
 
 
 @app.post("/logs/clear")
-async def clear_logs(_: None = Depends(require_auth)):
+async def clear_logs(current_user: Dict[str, Any] = Depends(get_current_user)):
     """清空日志"""
     try:
         collector = get_file_log_collector()
@@ -4542,7 +4508,7 @@ async def clear_logs(_: None = Depends(require_auth)):
 # ==================== 商品管理API ====================
 
 @app.post("/items/get-all-from-account")
-async def get_all_items_from_account(request: dict, _: None = Depends(require_auth)):
+async def get_all_items_from_account(request: dict, current_user: Dict[str, Any] = Depends(get_current_user)):
     """从指定账号获取所有商品信息"""
     try:
         cookie_id = request.get('cookie_id')
@@ -4589,7 +4555,7 @@ async def get_all_items_from_account(request: dict, _: None = Depends(require_au
 
 
 @app.post("/items/get-by-page")
-async def get_items_by_page(request: dict, _: None = Depends(require_auth)):
+async def get_items_by_page(request: dict, current_user: Dict[str, Any] = Depends(get_current_user)):
     """从指定账号按页获取商品信息"""
     try:
         # 验证参数
@@ -5513,7 +5479,7 @@ def clear_table_data(table_name: str, admin_user: Dict[str, Any] = Depends(requi
 
 # 商品多规格管理API
 @app.put("/items/{cookie_id}/{item_id}/multi-spec")
-def update_item_multi_spec(cookie_id: str, item_id: str, spec_data: dict, _: None = Depends(require_auth)):
+def update_item_multi_spec(cookie_id: str, item_id: str, spec_data: dict, current_user: Dict[str, Any] = Depends(get_current_user)):
     """更新商品的多规格状态"""
     try:
         from db_manager import db_manager
@@ -5533,7 +5499,7 @@ def update_item_multi_spec(cookie_id: str, item_id: str, spec_data: dict, _: Non
 
 # 商品多数量发货管理API
 @app.put("/items/{cookie_id}/{item_id}/multi-quantity-delivery")
-def update_item_multi_quantity_delivery(cookie_id: str, item_id: str, delivery_data: dict, _: None = Depends(require_auth)):
+def update_item_multi_quantity_delivery(cookie_id: str, item_id: str, delivery_data: dict, current_user: Dict[str, Any] = Depends(get_current_user)):
     """更新商品的多数量发货状态"""
     try:
         from db_manager import db_manager

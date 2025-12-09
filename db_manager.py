@@ -198,7 +198,7 @@ class DBManager:
             CREATE TABLE IF NOT EXISTS cards (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
-                type TEXT NOT NULL CHECK (type IN ('api', 'text', 'data', 'image')),
+                type TEXT NOT NULL CHECK (type IN ('api', 'yifan_api', 'text', 'data', 'image')),
                 api_config TEXT,
                 text_content TEXT,
                 data_content TEXT,
@@ -486,19 +486,19 @@ class DBManager:
             pass
 
     def _update_cards_table_constraints(self, cursor):
-        """更新cards表的CHECK约束以支持image类型"""
+        """更新cards表的CHECK约束以支持image和yifan_api类型"""
         try:
-            # 尝试插入一个测试的image类型记录来检查约束
+            # 尝试插入一个测试的yifan_api类型记录来检查约束
             cursor.execute('''
                 INSERT INTO cards (name, type, user_id)
-                VALUES ('__test_image_constraint__', 'image', 1)
+                VALUES ('__test_yifan_constraint__', 'yifan_api', 1)
             ''')
             # 如果插入成功，立即删除测试记录
-            cursor.execute("DELETE FROM cards WHERE name = '__test_image_constraint__'")
-            logger.info("cards表约束检查通过，支持image类型")
+            cursor.execute("DELETE FROM cards WHERE name = '__test_yifan_constraint__'")
+            logger.info("cards表约束检查通过，支持yifan_api类型")
         except Exception as e:
             if "CHECK constraint failed" in str(e) or "constraint" in str(e).lower():
-                logger.info("检测到旧的CHECK约束，开始更新cards表...")
+                logger.info("检测到旧的CHECK约束，开始更新cards表以支持yifan_api类型...")
 
                 # 重建表以更新约束
                 try:
@@ -507,7 +507,7 @@ class DBManager:
                     CREATE TABLE IF NOT EXISTS cards_new (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         name TEXT NOT NULL,
-                        type TEXT NOT NULL CHECK (type IN ('api', 'text', 'data', 'image')),
+                        type TEXT NOT NULL CHECK (type IN ('api', 'yifan_api', 'text', 'data', 'image')),
                         api_config TEXT,
                         text_content TEXT,
                         data_content TEXT,
@@ -1614,12 +1614,16 @@ class DBManager:
                 return False
 
     def get_keywords_with_type(self, cookie_id: str) -> List[Dict[str, any]]:
-        """获取指定Cookie的关键字列表（包含类型信息）"""
+        """获取指定Cookie的关键字列表（包含类型信息和商品名称）"""
         with self.lock:
             try:
                 cursor = self.conn.cursor()
+                # 关联查询商品信息表，获取商品名称
                 self._execute_sql(cursor,
-                    "SELECT keyword, reply, item_id, type, image_url FROM keywords WHERE cookie_id = ?",
+                    """SELECT k.keyword, k.reply, k.item_id, k.type, k.image_url, i.item_title 
+                    FROM keywords k 
+                    LEFT JOIN item_info i ON k.item_id = i.item_id AND k.cookie_id = i.cookie_id 
+                    WHERE k.cookie_id = ?""",
                     (cookie_id,))
 
                 results = []
@@ -1629,7 +1633,8 @@ class DBManager:
                         'reply': row[1],
                         'item_id': row[2],
                         'type': row[3] or 'text',  # 默认为text类型
-                        'image_url': row[4]
+                        'image_url': row[4],
+                        'item_title': row[5]  # 添加商品名称
                     }
                     results.append(keyword_data)
 
@@ -4116,6 +4121,73 @@ class DBManager:
                 pass
             return success_count
 
+    def batch_update_item_title_price(self, items_data: list) -> int:
+        """批量更新商品标题和价格（不更新商品详情）
+        
+        Args:
+            items_data: 商品数据列表，每个元素包含 cookie_id, item_id, item_title, item_price
+        
+        Returns:
+            int: 成功更新的商品数量
+        """
+        if not items_data:
+            return 0
+        
+        success_count = 0
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                
+                # 使用事务批量处理
+                cursor.execute('BEGIN TRANSACTION')
+                
+                for item_data in items_data:
+                    try:
+                        cookie_id = item_data.get('cookie_id')
+                        item_id = item_data.get('item_id')
+                        item_title = item_data.get('item_title', '')
+                        item_price = item_data.get('item_price', '')
+                        item_category = item_data.get('item_category', '')
+                        
+                        if not cookie_id or not item_id:
+                            continue
+                        
+                        # 只更新标题、价格和分类，不更新商品详情
+                        update_sql = '''
+                        UPDATE item_info SET
+                            item_title = ?,
+                            item_price = ?,
+                            item_category = ?,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE cookie_id = ? AND item_id = ?
+                        '''
+                        cursor.execute(update_sql, (
+                            item_title,
+                            item_price,
+                            item_category,
+                            cookie_id,
+                            item_id
+                        ))
+                        
+                        if cursor.rowcount > 0:
+                            success_count += 1
+                    
+                    except Exception as item_e:
+                        logger.warning(f"批量更新单个商品失败 {item_data.get('item_id', 'unknown')}: {item_e}")
+                        continue
+                
+                cursor.execute('COMMIT')
+                logger.info(f"批量更新商品标题和价格完成: {success_count}/{len(items_data)} 个商品")
+                return success_count
+        
+        except Exception as e:
+            logger.error(f"批量更新商品标题和价格失败: {e}")
+            try:
+                cursor.execute('ROLLBACK')
+            except:
+                pass
+            return success_count
+
     def delete_item_info(self, cookie_id: str, item_id: str) -> bool:
         """删除商品信息
 
@@ -4536,6 +4608,242 @@ class DBManager:
             except Exception as e:
                 logger.error(f"获取Cookie订单列表失败: {cookie_id} - {e}")
                 return []
+
+    def update_order_yifan_status(self, order_id: str, yifan_orderno: str = None,
+                                  delivery_status: str = None, callback_data: str = None):
+        """
+        更新订单的亦凡API状态
+        
+        Args:
+            order_id: 订单ID（用户订单号）
+            yifan_orderno: 亦凡平台订单号
+            delivery_status: 发货状态（delivered/processing/failed等）
+            callback_data: 回调原始数据（JSON字符串）
+        
+        Returns:
+            bool: 是否更新成功
+        """
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                # 首先检查订单是否存在
+                cursor.execute("SELECT order_id FROM orders WHERE order_id = ?", (order_id,))
+                if not cursor.fetchone():
+                    logger.warning(f"订单不存在: {order_id}")
+                    return False
+                
+                # 检查是否存在yifan相关字段，如果不存在则添加
+                try:
+                    cursor.execute("SELECT yifan_orderno FROM orders LIMIT 1")
+                except:
+                    # 字段不存在，需要添加
+                    logger.info("为orders表添加亦凡回调相关字段...")
+                    cursor.execute("ALTER TABLE orders ADD COLUMN yifan_orderno TEXT")
+                    cursor.execute("ALTER TABLE orders ADD COLUMN delivery_status TEXT")
+                    cursor.execute("ALTER TABLE orders ADD COLUMN callback_data TEXT")
+                    cursor.execute("ALTER TABLE orders ADD COLUMN chat_id TEXT")
+                    self.conn.commit()
+                    logger.info("亦凡回调字段添加完成")
+                
+                # 构建更新语句
+                update_fields = []
+                update_values = []
+                
+                if yifan_orderno is not None:
+                    update_fields.append("yifan_orderno = ?")
+                    update_values.append(yifan_orderno)
+                
+                if delivery_status is not None:
+                    update_fields.append("delivery_status = ?")
+                    update_values.append(delivery_status)
+                    # 同时更新order_status字段
+                    update_fields.append("order_status = ?")
+                    update_values.append(delivery_status)
+                
+                if callback_data is not None:
+                    update_fields.append("callback_data = ?")
+                    update_values.append(callback_data)
+                
+                update_fields.append("updated_at = CURRENT_TIMESTAMP")
+                update_values.append(order_id)
+                
+                # 执行更新
+                sql = f"UPDATE orders SET {', '.join(update_fields)} WHERE order_id = ?"
+                cursor.execute(sql, update_values)
+                
+                self.conn.commit()
+                logger.info(f"更新订单亦凡状态成功: {order_id} -> {delivery_status}")
+                return True
+                
+            except Exception as e:
+                logger.error(f"更新订单亦凡状态失败: {order_id} - {e}")
+                self.conn.rollback()
+                return False
+
+    def get_order_info(self, order_id: str):
+        """
+        获取订单完整信息（包括亦凡回调相关信息）
+        
+        Args:
+            order_id: 订单ID
+        
+        Returns:
+            Dict: 订单信息
+        """
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                # 检查是否存在yifan相关字段
+                has_yifan_fields = False
+                try:
+                    cursor.execute("SELECT yifan_orderno FROM orders LIMIT 1")
+                    has_yifan_fields = True
+                except:
+                    pass
+                
+                if has_yifan_fields:
+                    cursor.execute('''
+                    SELECT order_id, item_id, buyer_id, spec_name, spec_value,
+                           quantity, amount, order_status, cookie_id, created_at, updated_at,
+                           yifan_orderno, delivery_status, callback_data, chat_id
+                    FROM orders WHERE order_id = ?
+                    ''', (order_id,))
+                    
+                    row = cursor.fetchone()
+                    if row:
+                        return {
+                            'order_id': row[0],
+                            'item_id': row[1],
+                            'buyer_id': row[2],
+                            'spec_name': row[3],
+                            'spec_value': row[4],
+                            'quantity': row[5],
+                            'amount': row[6],
+                            'order_status': row[7],
+                            'cookie_id': row[8],
+                            'created_at': row[9],
+                            'updated_at': row[10],
+                            'yifan_orderno': row[11],
+                            'delivery_status': row[12],
+                            'callback_data': row[13],
+                            'chat_id': row[14]
+                        }
+                else:
+                    # 使用旧的查询方式
+                    cursor.execute('''
+                    SELECT order_id, item_id, buyer_id, spec_name, spec_value,
+                           quantity, amount, order_status, cookie_id, created_at, updated_at
+                    FROM orders WHERE order_id = ?
+                    ''', (order_id,))
+                    
+                    row = cursor.fetchone()
+                    if row:
+                        return {
+                            'order_id': row[0],
+                            'item_id': row[1],
+                            'buyer_id': row[2],
+                            'spec_name': row[3],
+                            'spec_value': row[4],
+                            'quantity': row[5],
+                            'amount': row[6],
+                            'order_status': row[7],
+                            'cookie_id': row[8],
+                            'created_at': row[9],
+                            'updated_at': row[10]
+                        }
+                
+                return None
+                
+            except Exception as e:
+                logger.error(f"获取订单信息失败: {order_id} - {e}")
+                return None
+
+    def get_order_by_yifan_orderno(self, yifan_orderno: str):
+        """
+        根据亦凡订单号查找订单信息
+        
+        Args:
+            yifan_orderno: 亦凡平台订单号
+        
+        Returns:
+            Dict: 订单信息，如果未找到返回None
+        """
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                # 检查是否存在yifan相关字段
+                try:
+                    cursor.execute("SELECT yifan_orderno FROM orders LIMIT 1")
+                except:
+                    logger.warning("orders表不包含yifan_orderno字段")
+                    return None
+                
+                cursor.execute('''
+                SELECT order_id, item_id, buyer_id, spec_name, spec_value,
+                       quantity, amount, order_status, cookie_id, created_at, updated_at,
+                       yifan_orderno, delivery_status, callback_data, chat_id
+                FROM orders WHERE yifan_orderno = ?
+                ''', (yifan_orderno,))
+                
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        'order_id': row[0],
+                        'item_id': row[1],
+                        'buyer_id': row[2],
+                        'spec_name': row[3],
+                        'spec_value': row[4],
+                        'quantity': row[5],
+                        'amount': row[6],
+                        'order_status': row[7],
+                        'cookie_id': row[8],
+                        'created_at': row[9],
+                        'updated_at': row[10],
+                        'yifan_orderno': row[11],
+                        'delivery_status': row[12],
+                        'callback_data': row[13],
+                        'chat_id': row[14]
+                    }
+                
+                return None
+                
+            except Exception as e:
+                logger.error(f"根据亦凡订单号查找订单失败: {yifan_orderno} - {e}")
+                return None
+
+    def update_order_chat_id(self, order_id: str, chat_id: str):
+        """
+        更新订单的chat_id（用于后续回调通知）
+        
+        Args:
+            order_id: 订单ID
+            chat_id: 聊天ID
+        
+        Returns:
+            bool: 是否更新成功
+        """
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                # 检查是否存在chat_id字段，如果不存在则添加
+                try:
+                    cursor.execute("SELECT chat_id FROM orders LIMIT 1")
+                except:
+                    logger.info("为orders表添加chat_id字段...")
+                    cursor.execute("ALTER TABLE orders ADD COLUMN chat_id TEXT")
+                    self.conn.commit()
+                
+                cursor.execute("UPDATE orders SET chat_id = ? WHERE order_id = ?", (chat_id, order_id))
+                self.conn.commit()
+                return True
+                
+            except Exception as e:
+                logger.error(f"更新订单chat_id失败: {order_id} - {e}")
+                return False
 
     def delete_table_record(self, table_name: str, record_id: str):
         """删除指定表的指定记录"""

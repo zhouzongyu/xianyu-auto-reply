@@ -25,6 +25,9 @@ ITEM_DETAIL:
     timeout: 30  # 请求超时时间（秒）
     max_concurrent: 3  # 最大并发请求数
     retry_delay: 0.5  # 请求间隔（秒）
+YIFAN_API:
+  callback_url: http://116.196.116.76/yifan.php  # 亦凡API回调地址（中转服务器）
+  query_url: http://116.196.116.76/yifan.php  # 订单查询页面地址
 COOKIES:
   last_update_time: ''
   value: ''

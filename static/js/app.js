@@ -667,11 +667,12 @@ async function loadItemsList(accountId) {
 
 // 添加或更新关键词
 async function addKeyword() {
-    const keyword = document.getElementById('newKeyword').value.trim();
+    const keywordInput = document.getElementById('newKeyword').value.trim();
     const reply = document.getElementById('newReply').value.trim();
-    const itemId = document.getElementById('newItemIdSelect').value.trim();
+    const selectElement = document.getElementById('newItemIdSelect');
+    const selectedOptions = Array.from(selectElement.selectedOptions);
 
-    if (!keyword) {
+    if (!keywordInput) {
     showToast('请填写关键词', 'warning');
     return;
     }
@@ -687,6 +688,28 @@ async function addKeyword() {
 
     try {
     toggleLoading(true);
+
+    // 解析多个关键词（支持竖线、换行符分隔）
+    const keywords = keywordInput
+        .split(/[\|\n]/)
+        .map(k => k.trim())
+        .filter(k => k.length > 0);
+    
+    if (keywords.length === 0) {
+        showToast('请填写有效的关键词', 'warning');
+        toggleLoading(false);
+        return;
+    }
+
+    // 获取选中的商品ID列表
+    let itemIds = selectedOptions
+        .map(opt => opt.value)
+        .filter(id => id !== ''); // 过滤掉空值（通用关键词选项）
+    
+    // 如果没有选中任何商品，或者选中了空值，则作为通用关键词
+    if (itemIds.length === 0) {
+        itemIds = [''];
+    }
 
     // 获取当前关键词列表
     let currentKeywords = [...(keywordsData[currentCookieId] || [])];
@@ -720,6 +743,10 @@ async function addKeyword() {
         allKeywords = allKeywords.filter((item, index) => index !== window.editingIndex);
     }
 
+    // 检查重复关键词
+    const duplicates = [];
+    for (const keyword of keywords) {
+        for (const itemId of itemIds) {
     const existingKeyword = allKeywords.find(item =>
         item.keyword === keyword &&
         (item.item_id || '') === (itemId || '')
@@ -727,18 +754,28 @@ async function addKeyword() {
     if (existingKeyword) {
         const itemIdText = itemId ? `（商品ID: ${itemId}）` : '（通用关键词）';
         const typeText = existingKeyword.type === 'image' ? '图片' : '文本';
-        showToast(`关键词 "${keyword}" ${itemIdText} 已存在（${typeText}关键词），请使用其他关键词或商品ID`, 'warning');
+                duplicates.push(`"${keyword}" ${itemIdText}`);
+            }
+        }
+    }
+
+    if (duplicates.length > 0) {
+        showToast(`以下关键词已存在：\n${duplicates.join('\n')}\n请修改后重试`, 'warning');
         toggleLoading(false);
         return;
     }
 
-    // 添加新关键词或更新的关键词
+    // 展开添加多个关键词和多个商品ID的组合
+    for (const keyword of keywords) {
+        for (const itemId of itemIds) {
     const newKeyword = {
         keyword: keyword,
         reply: reply,
         item_id: itemId || ''
     };
     textKeywords.push(newKeyword);
+        }
+    }
 
     const response = await fetch(`${apiBase}/keywords-with-item-id/${currentCookieId}`, {
         method: 'POST',
@@ -752,20 +789,24 @@ async function addKeyword() {
     });
 
     if (response.ok) {
-        showToast(`✨ 关键词 "${keyword}" ${actionText}成功！`, 'success');
+        const totalAdded = keywords.length * itemIds.length;
+        const keywordText = keywords.length > 1 ? `${keywords.length}个关键词` : `"${keywords[0]}"`;
+        const itemText = itemIds.length > 1 ? `${itemIds.length}个商品` : (itemIds[0] ? '指定商品' : '通用');
+        showToast(`✨ ${keywordText} ${actionText}成功！（共${totalAdded}条配置，应用于${itemText}）`, 'success');
 
         // 清空输入框并重置样式
-        const keywordInput = document.getElementById('newKeyword');
+        const keywordInputEl = document.getElementById('newKeyword');
         const replyInput = document.getElementById('newReply');
         const selectElement = document.getElementById('newItemIdSelect');
         const addBtn = document.querySelector('.add-btn');
 
-        keywordInput.value = '';
+        keywordInputEl.value = '';
         replyInput.value = '';
         if (selectElement) {
-        selectElement.value = '';
+            // 清除所有选中项
+            Array.from(selectElement.options).forEach(opt => opt.selected = false);
         }
-        keywordInput.style.borderColor = '#e5e7eb';
+        keywordInputEl.style.borderColor = '#e5e7eb';
         replyInput.style.borderColor = '#e5e7eb';
         addBtn.style.opacity = '0.7';
         addBtn.style.transform = 'scale(0.95)';
@@ -788,7 +829,7 @@ async function addKeyword() {
 
         // 聚焦到关键词输入框，方便连续添加
         setTimeout(() => {
-        keywordInput.focus();
+        keywordInputEl.focus();
         }, 100);
 
         // 只刷新关键词列表，不重新加载整个界面
@@ -820,9 +861,9 @@ async function addKeyword() {
     }
 }
 
-// 渲染现代化关键词列表
+// 渲染现代化关键词列表（分组显示）
 function renderKeywordsList(keywords) {
-    console.log('渲染关键词列表:', keywords); // 调试信息
+    console.log('渲染关键词列表:', keywords);
     const container = document.getElementById('keywordsList');
 
     if (!container) {
@@ -847,72 +888,178 @@ function renderKeywordsList(keywords) {
     return;
     }
 
-    console.log(`开始渲染 ${keywords.length} 个关键词`);
+    // 按回复内容和类型分组
+    const groups = groupKeywordsByReply(keywords);
+    
+    console.log(`开始渲染 ${groups.length} 个分组，共 ${keywords.length} 个关键词`);
 
-    keywords.forEach((item, index) => {
-    console.log(`渲染关键词 ${index + 1}:`, item); // 调试信息
+    groups.forEach((group, groupIndex) => {
+        const groupItem = document.createElement('div');
+        groupItem.className = 'keyword-group-item';
 
-    const keywordItem = document.createElement('div');
-    keywordItem.className = 'keyword-item';
-
-    // 判断关键词类型
-    const keywordType = item.type || 'text'; // 默认为文本类型
-    const isImageType = keywordType === 'image';
-
-    // 类型标识
+        const isImageType = group.type === 'image';
     const typeBadge = isImageType ?
         '<span class="keyword-type-badge keyword-type-image"><i class="bi bi-image"></i> 图片</span>' :
         '<span class="keyword-type-badge keyword-type-text"><i class="bi bi-chat-text"></i> 文本</span>';
 
-    // 商品ID显示
-    const itemIdDisplay = item.item_id ?
-        `<small class="text-muted d-block"><i class="bi bi-box"></i> 商品ID: ${item.item_id}</small>` :
-        '<small class="text-muted d-block"><i class="bi bi-globe"></i> 通用关键词</small>';
-
-    // 内容显示
-    let contentDisplay = '';
+        // 回复内容显示
+        let replyDisplay = '';
     if (isImageType) {
-        // 图片类型显示图片预览
-        const imageUrl = item.reply || item.image_url || '';
-        contentDisplay = imageUrl ?
-            `<div class="d-flex align-items-center gap-3">
+            const imageUrl = group.reply || group.image_url || '';
+            replyDisplay = `
+                <div class="keyword-group-reply">
+                    <div class="d-flex align-items-center gap-3">
                 <img src="${imageUrl}" alt="关键词图片" class="keyword-image-preview" onclick="showImageModal('${imageUrl}')">
                 <div class="flex-grow-1">
-                    <p class="reply-text mb-0">用户发送关键词时将回复此图片</p>
-                    <small class="text-muted">点击图片查看大图</small>
+                            <strong>回复图片：</strong>
+                            <small class="text-muted d-block">点击图片查看大图</small>
                 </div>
-            </div>` :
-            '<p class="reply-text text-muted">图片加载失败</p>';
+                    </div>
+                </div>
+            `;
     } else {
-        // 文本类型显示文本内容
-        contentDisplay = `<p class="reply-text">${item.reply || ''}</p>`;
+            replyDisplay = `
+                <div class="keyword-group-reply">
+                    <strong>回复内容：</strong>
+                    <span class="reply-text-content">${group.reply || '<span class="text-muted">（空回复，不自动回复）</span>'}</span>
+                </div>
+            `;
     }
 
-    keywordItem.innerHTML = `
-        <div class="keyword-item-header">
-        <div class="keyword-tag">
+        // 关键词列表
+        const keywordsList = group.keywords.map((kw, kwIndex) => `
+            <span class="keyword-chip">
             <i class="bi bi-tag-fill"></i>
-            ${item.keyword}
-            ${typeBadge}
-            ${itemIdDisplay}
-        </div>
-        <div class="keyword-actions">
-            <button class="action-btn edit-btn ${isImageType ? 'edit-btn-disabled' : ''}" onclick="${isImageType ? 'editImageKeyword' : 'editKeyword'}(${index})" title="${isImageType ? '图片关键词不支持编辑' : '编辑'}">
-            <i class="bi bi-pencil"></i>
+                ${kw}
+                <button class="chip-remove-btn" onclick="deleteSpecificKeyword('${group.id}', ${kwIndex})" title="删除此关键词">
+                    <i class="bi bi-x"></i>
             </button>
-            <button class="action-btn delete-btn" onclick="deleteKeyword('${currentCookieId}', ${index})" title="删除">
-            <i class="bi bi-trash"></i>
+            </span>
+        `).join('');
+
+        // 商品列表
+        const itemsList = group.items.map((itemInfo, itemIndex) => {
+            const itemName = getItemName(itemInfo.item_id, itemInfo.item_title);
+            const displayText = itemInfo.item_id ? 
+                `${itemInfo.item_id} - ${itemName}` : 
+                '通用关键词（所有商品）';
+            const icon = itemInfo.item_id ? 'bi-box' : 'bi-globe';
+            
+            return `
+                <span class="item-chip">
+                    <i class="bi ${icon}"></i>
+                    ${displayText}
+                    <button class="chip-remove-btn" onclick="deleteSpecificItem('${group.id}', ${itemIndex})" title="删除此商品配置">
+                        <i class="bi bi-x"></i>
             </button>
+                </span>
+            `;
+        }).join('');
+
+        groupItem.innerHTML = `
+            <div class="keyword-group-header">
+                <div class="keyword-group-title">
+                    ${typeBadge}
+                    <span class="keyword-count-badge">${group.keywords.length}个关键词 × ${group.items.length}个应用 = ${group.keywords.length * group.items.length}条配置</span>
         </div>
         </div>
-        <div class="keyword-content">
-        ${contentDisplay}
+            ${replyDisplay}
+            <div class="keyword-group-content">
+                <div class="keyword-section">
+                    <div class="section-title"><i class="bi bi-tags"></i> 触发关键词</div>
+                    <div class="chips-container">
+                        ${keywordsList}
+                    </div>
+                </div>
+                <div class="item-section">
+                    <div class="section-title"><i class="bi bi-box-seam"></i> 应用范围</div>
+                    <div class="chips-container">
+                        ${itemsList}
+                    </div>
+                </div>
         </div>
     `;
-    container.appendChild(keywordItem);
+        
+        container.appendChild(groupItem);
     });
 
     console.log('关键词列表渲染完成');
+}
+
+// 按回复内容分组关键词
+function groupKeywordsByReply(keywords) {
+    const groupMap = new Map();
+    
+    keywords.forEach((item, index) => {
+        // 使用回复内容+类型+图片URL作为分组键
+        const key = `${item.type || 'text'}:${item.reply || ''}:${item.image_url || ''}`;
+        
+        if (!groupMap.has(key)) {
+            groupMap.set(key, {
+                id: `group_${groupMap.size}`,
+                type: item.type || 'text',
+                reply: item.reply || '',
+                image_url: item.image_url || '',
+                keywords: [],
+                items: [],
+                indices: [] // 保存原始索引
+            });
+        }
+        
+        const group = groupMap.get(key);
+        
+        // 添加关键词（去重）
+        if (!group.keywords.includes(item.keyword)) {
+            group.keywords.push(item.keyword);
+        }
+        
+        // 添加商品（去重）
+        const itemId = item.item_id || '';
+        const existingItem = group.items.find(i => (i.item_id || '') === itemId);
+        if (!existingItem) {
+            group.items.push({
+                item_id: itemId,
+                item_title: item.item_title || '',  // 添加商品名称
+                indices: [index]
+            });
+        } else {
+            existingItem.indices.push(index);
+        }
+        
+        // 记录原始索引
+        group.indices.push(index);
+    });
+    
+    return Array.from(groupMap.values());
+}
+
+// 获取商品名称（截取前30个字符）
+function getItemName(itemId, itemTitle) {
+    if (!itemId) return '';
+    
+    // 优先使用传入的商品名称
+    if (itemTitle && itemTitle.trim()) {
+        const name = itemTitle.trim();
+        // 截取前30个字符
+        return name.length > 30 ? name.substring(0, 30) + '...' : name;
+    }
+    
+    // 从商品列表中查找商品名称
+    const itemsSelect = document.getElementById('newItemIdSelect');
+    if (itemsSelect) {
+        const option = Array.from(itemsSelect.options).find(opt => opt.value === itemId);
+        if (option && option.textContent) {
+            // 提取商品名称（格式：itemId - 商品名称）
+            const parts = option.textContent.split(' - ');
+            if (parts.length > 1) {
+                const name = parts.slice(1).join(' - ');
+                // 截取前30个字符
+                return name.length > 30 ? name.substring(0, 30) + '...' : name;
+            }
+        }
+    }
+    
+    return '未知商品';
 }
 
 // 聚焦到关键词输入框
@@ -1041,6 +1188,123 @@ async function deleteKeyword(cookieId, index) {
     } catch (error) {
     console.error('删除关键词失败:', error);
     showToast('删除关键词删除失败', 'danger');
+    } finally {
+    toggleLoading(false);
+    }
+}
+
+// 删除特定关键词（删除该关键词在所有商品中的配置）
+async function deleteSpecificKeyword(groupId, keywordIndex) {
+    const keywords = keywordsData[currentCookieId] || [];
+    const groups = groupKeywordsByReply(keywords);
+    const group = groups.find(g => g.id === groupId);
+    
+    if (!group) {
+        showToast('找不到关键词分组', 'warning');
+        return;
+    }
+    
+    const targetKeyword = group.keywords[keywordIndex];
+    if (!confirm(`确定要删除关键词 "${targetKeyword}" 在所有商品中的配置吗？`)) {
+        return;
+    }
+    
+    try {
+        toggleLoading(true);
+        
+        // 找到所有需要删除的索引（从后往前删除，避免索引变化）
+        const indicesToDelete = [];
+        keywords.forEach((item, index) => {
+            if (item.keyword === targetKeyword && 
+                (item.type || 'text') === group.type &&
+                (item.reply || '') === group.reply &&
+                (item.image_url || '') === group.image_url) {
+                indicesToDelete.push(index);
+            }
+        });
+        
+        // 从后往前删除
+        indicesToDelete.sort((a, b) => b - a);
+        
+        for (const index of indicesToDelete) {
+            const response = await fetch(`${apiBase}/keywords/${currentCookieId}/${index}`, {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `Bearer ${authToken}`
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error('删除失败');
+            }
+        }
+        
+        showToast(`✅ 关键词 "${targetKeyword}" 已删除（${indicesToDelete.length}条配置）`, 'success');
+        await refreshKeywordsList();
+        
+    } catch (error) {
+        console.error('删除关键词失败:', error);
+        showToast('删除关键词失败', 'danger');
+    } finally {
+        toggleLoading(false);
+    }
+}
+
+// 删除特定商品的配置（删除该商品下所有关键词的配置）
+async function deleteSpecificItem(groupId, itemIndex) {
+    const keywords = keywordsData[currentCookieId] || [];
+    const groups = groupKeywordsByReply(keywords);
+    const group = groups.find(g => g.id === groupId);
+    
+    if (!group) {
+        showToast('找不到关键词分组', 'warning');
+        return;
+    }
+    
+    const targetItem = group.items[itemIndex];
+    const itemId = targetItem.item_id || '';
+    const itemName = itemId ? `商品 ${itemId} - ${getItemName(itemId, targetItem.item_title)}` : '通用关键词（所有商品）';
+    
+    if (!confirm(`确定要删除 "${itemName}" 的所有关键词配置吗？\n将删除该商品下的 ${group.keywords.length} 个关键词。`)) {
+        return;
+    }
+    
+    try {
+        toggleLoading(true);
+        
+        // 找到所有需要删除的索引
+        const indicesToDelete = [];
+        keywords.forEach((item, index) => {
+            if ((item.item_id || '') === itemId &&
+                (item.type || 'text') === group.type &&
+                (item.reply || '') === group.reply &&
+                (item.image_url || '') === group.image_url) {
+                indicesToDelete.push(index);
+            }
+        });
+        
+        // 从后往前删除
+        indicesToDelete.sort((a, b) => b - a);
+        
+        for (const index of indicesToDelete) {
+            const response = await fetch(`${apiBase}/keywords/${currentCookieId}/${index}`, {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `Bearer ${authToken}`
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error('删除失败');
+            }
+        }
+        
+        showToast(`✅ ${itemName} 的配置已删除（${indicesToDelete.length}条）`, 'success');
+        await refreshKeywordsList();
+        
+    } catch (error) {
+        console.error('删除商品配置失败:', error);
+        showToast('删除商品配置失败', 'danger');
     } finally {
     toggleLoading(false);
     }
@@ -2837,7 +3101,7 @@ const channelTypeConfigs = {
     },
     telegram: {
     title: 'Telegram通知',
-    description: '通过Telegram机器人发送通知消息',
+    description: '通过Telegram机器人发送通知消息（需要海外服务器）',
     icon: 'bi-telegram',
     color: 'primary',
     fields: [
@@ -3567,6 +3831,9 @@ function renderCardsList(cards) {
         case 'api':
         typeBadge = '<span class="badge bg-info">API接口</span>';
         break;
+        case 'yifan_api':
+        typeBadge = '<span class="badge bg-purple">亦凡卡劵API</span>';
+        break;
         case 'text':
         typeBadge = '<span class="badge bg-success">固定文字</span>';
         break;
@@ -3662,12 +3929,21 @@ function showAddCardModal() {
 
 // 切换卡券类型字段显示
 function toggleCardTypeFields() {
-    const cardType = document.getElementById('cardType').value;
+    const cardType = document.getElementById('cardType')?.value || 'text';
 
-    document.getElementById('apiFields').style.display = cardType === 'api' ? 'block' : 'none';
-    document.getElementById('textFields').style.display = cardType === 'text' ? 'block' : 'none';
-    document.getElementById('dataFields').style.display = cardType === 'data' ? 'block' : 'none';
-    document.getElementById('imageFields').style.display = cardType === 'image' ? 'block' : 'none';
+    // 安全地设置元素显示状态
+    const setDisplay = (id, condition) => {
+        const element = document.getElementById(id);
+        if (element) {
+            element.style.display = condition ? 'block' : 'none';
+        }
+    };
+
+    setDisplay('apiFields', cardType === 'api');
+    setDisplay('yifanApiFields', cardType === 'yifan_api');
+    setDisplay('textFields', cardType === 'text');
+    setDisplay('dataFields', cardType === 'data');
+    setDisplay('imageFields', cardType === 'image');
 
     // 如果是API类型，初始化API方法监听
     if (cardType === 'api') {
@@ -3683,7 +3959,10 @@ function toggleCardTypeFields() {
 
 // 切换API参数提示显示
 function toggleApiParamsHelp() {
-    const apiMethod = document.getElementById('apiMethod').value;
+    const apiMethodElement = document.getElementById('apiMethod');
+    if (!apiMethodElement) return;
+    
+    const apiMethod = apiMethodElement.value;
     const postParamsHelp = document.getElementById('postParamsHelp');
 
     if (postParamsHelp) {
@@ -4039,6 +4318,11 @@ function clearAddCardForm() {
     setElementValue('apiHeaders', '');
     setElementValue('apiParams', '');
     setElementValue('apiTimeout', '10');
+    setElementValue('yifanUserId', '');
+    setElementValue('yifanUserKey', '');
+    setElementValue('yifanGoodsId', '');
+    setElementValue('yifanCallbackUrl', '');
+    setElementValue('yifanRequireAccount', false);
 
     // 重置字段显示
     toggleCardTypeFields();
@@ -4115,6 +4399,26 @@ async function saveCard() {
             timeout: parseInt(document.getElementById('apiTimeout').value),
             headers: headers,
             params: params
+        };
+        break;
+        case 'yifan_api':
+        // 验证必填字段
+        const yifanUserId = document.getElementById('yifanUserId').value.trim();
+        const yifanUserKey = document.getElementById('yifanUserKey').value.trim();
+        const yifanGoodsId = document.getElementById('yifanGoodsId').value.trim();
+
+        if (!yifanUserId || !yifanUserKey || !yifanGoodsId) {
+            showToast('请填写商户ID、商户KEY和商品ID', 'warning');
+            return;
+        }
+
+        // 亦凡API配置也存储在api_config字段中
+        cardData.api_config = {
+            user_id: yifanUserId,
+            user_key: yifanUserKey,
+            goods_id: yifanGoodsId,
+            callback_url: document.getElementById('yifanCallbackUrl').value.trim(),
+            require_account: document.getElementById('yifanRequireAccount').checked
         };
         break;
         case 'text':
@@ -4252,6 +4556,9 @@ function renderDeliveryRulesList(rules) {
         switch(rule.card_type) {
         case 'api':
             cardTypeBadge = '<span class="badge bg-info">API接口</span>';
+            break;
+        case 'yifan_api':
+            cardTypeBadge = '<span class="badge bg-purple">亦凡卡劵API</span>';
             break;
         case 'text':
             cardTypeBadge = '<span class="badge bg-success">固定文字</span>';
@@ -4468,6 +4775,12 @@ async function editCard(cardId) {
         document.getElementById('editApiTimeout').value = card.api_config.timeout || 10;
         document.getElementById('editApiHeaders').value = card.api_config.headers || '{}';
         document.getElementById('editApiParams').value = card.api_config.params || '{}';
+        } else if (card.type === 'yifan_api' && card.api_config) {
+        document.getElementById('editYifanUserId').value = card.api_config.user_id || '';
+        document.getElementById('editYifanUserKey').value = card.api_config.user_key || '';
+        document.getElementById('editYifanGoodsId').value = card.api_config.goods_id || '';
+        document.getElementById('editYifanCallbackUrl').value = card.api_config.callback_url || '';
+        document.getElementById('editYifanRequireAccount').checked = card.api_config.require_account || false;
         } else if (card.type === 'text') {
         document.getElementById('editTextContent').value = card.text_content || '';
         } else if (card.type === 'data') {
@@ -4527,6 +4840,7 @@ function toggleEditCardTypeFields() {
     const cardType = document.getElementById('editCardType').value;
 
     document.getElementById('editApiFields').style.display = cardType === 'api' ? 'block' : 'none';
+    document.getElementById('editYifanApiFields').style.display = cardType === 'yifan_api' ? 'block' : 'none';
     document.getElementById('editTextFields').style.display = cardType === 'text' ? 'block' : 'none';
     document.getElementById('editDataFields').style.display = cardType === 'data' ? 'block' : 'none';
     document.getElementById('editImageFields').style.display = cardType === 'image' ? 'block' : 'none';
@@ -4627,6 +4941,26 @@ async function updateCard() {
             timeout: parseInt(document.getElementById('editApiTimeout').value),
             headers: headers,
             params: params
+        };
+        break;
+        case 'yifan_api':
+        // 验证必填字段
+        const editYifanUserId = document.getElementById('editYifanUserId').value.trim();
+        const editYifanUserKey = document.getElementById('editYifanUserKey').value.trim();
+        const editYifanGoodsId = document.getElementById('editYifanGoodsId').value.trim();
+
+        if (!editYifanUserId || !editYifanUserKey || !editYifanGoodsId) {
+            showToast('请填写商户ID、商户KEY和商品ID', 'warning');
+            return;
+        }
+
+        // 亦凡API配置也存储在api_config字段中
+        cardData.api_config = {
+            user_id: editYifanUserId,
+            user_key: editYifanUserKey,
+            goods_id: editYifanGoodsId,
+            callback_url: document.getElementById('editYifanCallbackUrl').value.trim(),
+            require_account: document.getElementById('editYifanRequireAccount').checked
         };
         break;
         case 'text':
@@ -5073,8 +5407,10 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     }
 
-    // 页面加载时加载用户设置
-    loadUserSettings();
+    // 页面加载时加载用户设置（仅在已登录时）
+    if (authToken) {
+        loadUserSettings();
+    }
 });
 
 // ==================== 备份管理功能 ====================
@@ -7714,7 +8050,11 @@ function showAddImageKeywordModal() {
 
     // 清空表单
     document.getElementById('imageKeyword').value = '';
-    document.getElementById('imageItemIdSelect').value = '';
+    const imageSelectElement = document.getElementById('imageItemIdSelect');
+    if (imageSelectElement) {
+        // 清除所有选中项
+        Array.from(imageSelectElement.options).forEach(opt => opt.selected = false);
+    }
     document.getElementById('imageFile').value = '';
     hideImagePreview();
 }
@@ -7864,12 +8204,13 @@ function hideImagePreview() {
 
 // 添加图片关键词
 async function addImageKeyword() {
-    const keyword = document.getElementById('imageKeyword').value.trim();
-    const itemId = document.getElementById('imageItemIdSelect').value.trim();
+    const keywordInput = document.getElementById('imageKeyword').value.trim();
+    const selectElement = document.getElementById('imageItemIdSelect');
+    const selectedOptions = Array.from(selectElement.selectedOptions);
     const fileInput = document.getElementById('imageFile');
     const file = fileInput.files[0];
 
-    if (!keyword) {
+    if (!keywordInput) {
         showToast('请填写关键词', 'warning');
         return;
     }
@@ -7877,6 +8218,27 @@ async function addImageKeyword() {
     if (!file) {
         showToast('请选择图片文件', 'warning');
         return;
+    }
+
+    // 解析多个关键词（支持竖线、换行符分隔）
+    const keywords = keywordInput
+        .split(/[\|\n]/)
+        .map(k => k.trim())
+        .filter(k => k.length > 0);
+    
+    if (keywords.length === 0) {
+        showToast('请填写有效的关键词', 'warning');
+        return;
+    }
+
+    // 获取选中的商品ID列表
+    let itemIds = selectedOptions
+        .map(opt => opt.value)
+        .filter(id => id !== ''); // 过滤掉空值（通用关键词选项）
+    
+    // 如果没有选中任何商品，或者选中了空值，则作为通用关键词
+    if (itemIds.length === 0) {
+        itemIds = [''];
     }
 
     if (!currentCookieId) {
@@ -7887,6 +8249,35 @@ async function addImageKeyword() {
     try {
         toggleLoading(true);
 
+        // 检查重复关键词
+        const allKeywords = keywordsData[currentCookieId] || [];
+        const duplicates = [];
+        for (const keyword of keywords) {
+            for (const itemId of itemIds) {
+                const existingKeyword = allKeywords.find(item =>
+                    item.keyword === keyword &&
+                    (item.item_id || '') === (itemId || '')
+                );
+                if (existingKeyword) {
+                    const itemIdText = itemId ? `（商品ID: ${itemId}）` : '（通用关键词）';
+                    duplicates.push(`"${keyword}" ${itemIdText}`);
+                }
+            }
+        }
+
+        if (duplicates.length > 0) {
+            showToast(`以下关键词已存在：\n${duplicates.join('\n')}\n请修改后重试`, 'warning');
+            toggleLoading(false);
+            return;
+        }
+
+        // 循环为每个关键词和商品ID组合上传图片
+        let successCount = 0;
+        let failCount = 0;
+        const totalCount = keywords.length * itemIds.length;
+
+        for (const keyword of keywords) {
+            for (const itemId of itemIds) {
         // 创建FormData对象
         const formData = new FormData();
         formData.append('keyword', keyword);
@@ -7902,7 +8293,23 @@ async function addImageKeyword() {
         });
 
         if (response.ok) {
-            showToast(`✨ 图片关键词 "${keyword}" 添加成功！`, 'success');
+                    successCount++;
+                } else {
+                    failCount++;
+                    console.error(`图片关键词 "${keyword}" (商品ID: ${itemId || '通用'}) 添加失败`);
+                }
+            }
+        }
+
+        if (successCount > 0) {
+            const keywordText = keywords.length > 1 ? `${keywords.length}个关键词` : `"${keywords[0]}"`;
+            const itemText = itemIds.length > 1 ? `${itemIds.length}个商品` : (itemIds[0] ? '指定商品' : '通用');
+            
+            if (failCount === 0) {
+                showToast(`✨ ${keywordText} 添加成功！（共${totalCount}条配置，应用于${itemText}）`, 'success');
+            } else {
+                showToast(`⚠️ 部分添加成功：成功${successCount}条，失败${failCount}条`, 'warning');
+            }
 
             // 关闭模态框
             const modal = bootstrap.Modal.getInstance(document.getElementById('addImageKeywordModal'));
@@ -7911,51 +8318,7 @@ async function addImageKeyword() {
             // 只刷新关键词列表，不重新加载整个界面
             await refreshKeywordsList();
         } else {
-            try {
-                const errorData = await response.json();
-                let errorMessage = errorData.detail || '图片关键词添加失败';
-
-                // 根据不同的错误类型提供更友好的提示
-                if (errorMessage.includes('关键词') && (errorMessage.includes('已存在') || errorMessage.includes('重复'))) {
-                    errorMessage = `❌ 关键词重复：${errorMessage}`;
-                } else if (errorMessage.includes('图片尺寸过大')) {
-                    errorMessage = '❌ 图片尺寸过大，请选择尺寸较小的图片（建议不超过4096x4096像素）';
-                } else if (errorMessage.includes('图片像素总数过大')) {
-                    errorMessage = '❌ 图片像素总数过大，请选择分辨率较低的图片';
-                } else if (errorMessage.includes('图片数据验证失败')) {
-                    errorMessage = '❌ 图片格式不支持或文件损坏，请选择JPG、PNG、GIF格式的图片';
-                } else if (errorMessage.includes('图片保存失败')) {
-                    errorMessage = '❌ 图片保存失败，请检查图片格式和大小后重试';
-                } else if (errorMessage.includes('文件大小超过限制')) {
-                    errorMessage = '❌ 图片文件过大，请选择小于5MB的图片';
-                } else if (errorMessage.includes('不支持的图片格式')) {
-                    errorMessage = '❌ 不支持的图片格式，请选择JPG、PNG、GIF格式的图片';
-                } else if (response.status === 413) {
-                    errorMessage = '❌ 图片文件过大，请选择小于5MB的图片';
-                } else if (response.status === 400) {
-                    errorMessage = `❌ 请求参数错误：${errorMessage}`;
-                } else if (response.status === 500) {
-                    errorMessage = '❌ 服务器内部错误，请稍后重试';
-                }
-
-                console.error('图片关键词添加失败:', errorMessage);
-                showToast(errorMessage, 'danger');
-            } catch (e) {
-                // 如果不是JSON格式，使用文本
-                const errorText = await response.text();
-                console.error('图片关键词添加失败:', errorText);
-
-                let friendlyMessage = '图片关键词添加失败';
-                if (response.status === 413) {
-                    friendlyMessage = '❌ 图片文件过大，请选择小于5MB的图片';
-                } else if (response.status === 400) {
-                    friendlyMessage = '❌ 图片格式不正确或参数错误，请检查后重试';
-                } else if (response.status === 500) {
-                    friendlyMessage = '❌ 服务器内部错误，请稍后重试';
-                }
-
-                showToast(friendlyMessage, 'danger');
-            }
+            showToast('❌ 所有图片关键词添加失败，请检查后重试', 'danger');
         }
     } catch (error) {
         console.error('添加图片关键词失败:', error);
@@ -9324,13 +9687,11 @@ async function deleteOrder(orderId) {
             return;
         }
 
-        const response = await fetch(`${apiBase}/admin/data/orders/delete`, {
-            method: 'POST',
+        const response = await fetch(`${apiBase}/admin/data/orders/${orderId}`, {
+            method: 'DELETE',
             headers: {
-                'Content-Type': 'application/json',
                 'Authorization': `Bearer ${authToken}`
-            },
-            body: JSON.stringify({ record_id: orderId })
+            }
         });
 
         if (response.ok) {
@@ -9366,13 +9727,11 @@ async function batchDeleteOrders() {
 
         for (const orderId of orderIds) {
             try {
-                const response = await fetch(`${apiBase}/admin/data/orders/delete`, {
-                    method: 'POST',
+                const response = await fetch(`${apiBase}/admin/data/orders/${orderId}`, {
+                    method: 'DELETE',
                     headers: {
-                        'Content-Type': 'application/json',
                         'Authorization': `Bearer ${authToken}`
-                    },
-                    body: JSON.stringify({ record_id: orderId })
+                    }
                 });
 
                 if (response.ok) {
@@ -11318,44 +11677,66 @@ async function showProjectStats() {
     }
 }
 
+// 当前本地版本号（硬编码）
+const LOCAL_VERSION = 'v1.0.6';
+
+// 远程版本检查API地址（请修改为您的PHP地址）
+const VERSION_CHECK_URL = 'http://116.196.116.76/version.php';
+
+// 缓存远程版本信息
+let remoteVersionInfo = null;
+
 /**
  * 加载系统版本号并检查更新
  */
 async function loadSystemVersion() {
     try {
-        // 从 version.txt 文件读取当前系统版本
-        let currentSystemVersion = 'v1.0.5-price'; // 默认版本
+        // 显示当前本地版本
+        document.getElementById('versionNumber').textContent = LOCAL_VERSION;
+        
+        // 添加点击事件，显示版本信息
+        const systemVersionBadge = document.getElementById('systemVersion');
+        if (systemVersionBadge) {
+            systemVersionBadge.style.cursor = 'pointer';
+            systemVersionBadge.title = '点击查看版本详情';
+            systemVersionBadge.onclick = () => showVersionInfo(LOCAL_VERSION);
+        }
 
-        // try {
-        //     const versionResponse = await fetch('/static/version.txt');
-        //     if (versionResponse.ok) {
-        //         currentSystemVersion = (await versionResponse.text()).trim();
-        //     }
-        // } catch (e) {
-        //     console.warn('无法读取本地版本文件，使用默认版本');
-        // }
-
-        // 显示当前版本
-        document.getElementById('versionNumber').textContent = currentSystemVersion;
-
-        // 获取远程版本并检查更新
-        // const response = await fetch('http://xianyu.zhinianblog.cn/index.php?action=getVersion');
-        // const result = await response.json();
-
-        // if (result.error) {
-        //     console.error('获取版本号失败:', result.message);
-        //     return;
-        // }
-
-        // const remoteVersion = result.data;
-
-        // // 检查是否有更新
-        // if (remoteVersion !== currentSystemVersion) {
-        //     showUpdateAvailable(remoteVersion);
-        // }
+        // 从远程PHP获取版本信息
+        try {
+            const response = await fetch(VERSION_CHECK_URL, {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json'
+                }
+            });
+            
+            if (!response.ok) {
+                console.warn('版本检查请求失败:', response.status);
+                return;
+            }
+            
+            const result = await response.json();
+            
+            if (result.error || !result.success) {
+                console.warn('版本检查返回错误:', result.message);
+                return;
+            }
+            
+            // 缓存远程版本信息
+            remoteVersionInfo = result.data;
+            
+            // 检查是否有更新（版本号不一致）
+            if (remoteVersionInfo.version && remoteVersionInfo.version !== LOCAL_VERSION) {
+                showUpdateAvailable(remoteVersionInfo.version);
+            }
+            
+        } catch (fetchError) {
+            console.warn('无法连接版本检查服务器:', fetchError.message);
+        }
 
     } catch (error) {
-        console.error('获取版本号失败:', error);
+        console.error('版本加载失败:', error);
         document.getElementById('versionNumber').textContent = '未知';
     }
 }
@@ -11390,23 +11771,41 @@ function showUpdateAvailable(newVersion) {
 }
 
 /**
- * 获取更新信息
+ * 获取更新信息（使用缓存或重新请求）
  */
 async function getUpdateInfo() {
+    // 如果已有缓存的远程版本信息，直接使用
+    if (remoteVersionInfo) {
+        return remoteVersionInfo;
+    }
+    
+    // 否则重新请求
     try {
-        const response = await fetch('http://xianyu.zhinianblog.cn/index.php?action=getUpdateInfo');
+        const response = await fetch(VERSION_CHECK_URL, {
+            method: 'GET',
+            headers: {
+                'Accept': 'application/json'
+            }
+        });
+        
+        if (!response.ok) {
+            showToast('获取更新信息失败: 网络错误', 'danger');
+            return null;
+        }
+        
         const result = await response.json();
 
-        if (result.error) {
-            showToast('获取更新信息失败: ' + result.message, 'danger');
+        if (result.error || !result.success) {
+            showToast('获取更新信息失败: ' + (result.message || '未知错误'), 'danger');
             return null;
         }
 
-        return result.data;
+        remoteVersionInfo = result.data;
+        return remoteVersionInfo;
 
     } catch (error) {
         console.error('获取更新信息失败:', error);
-        showToast('获取更新信息失败', 'danger');
+        showToast('获取更新信息失败: ' + error.message, 'danger');
         return null;
     }
 }
@@ -11418,42 +11817,141 @@ async function showUpdateInfo(newVersion) {
     const updateInfo = await getUpdateInfo();
     if (!updateInfo) return;
 
+    // 构建更新内容列表
     let updateList = '';
     if (updateInfo.updates && updateInfo.updates.length > 0) {
-        updateList = updateInfo.updates.map(item => `<li class="mb-2">${item}</li>`).join('');
+        updateList = updateInfo.updates.map(item => `<li style="color: #333; margin-bottom: 8px; line-height: 1.5; font-size: 15px;"><i class="bi bi-check-circle-fill me-2" style="color: #28a745;"></i>${item}</li>`).join('');
+    }
+    
+    // 构建安装方式区域
+    let installSection = '';
+    if (updateInfo.installMethods && updateInfo.installMethods.length > 0) {
+        installSection = updateInfo.installMethods.map(method => {
+            let content = '';
+            
+            // 如果有步骤说明（如Docker安装）
+            if (method.steps && method.steps.length > 0) {
+                content = `
+                    <div style="background: #2d3748; color: #e2e8f0; padding: 12px 14px; border-radius: 6px; font-family: 'Consolas', 'Monaco', monospace; font-size: 13px; line-height: 1.6;">
+                        ${method.steps.map(step => `<div style="margin-bottom: 6px;">${step}</div>`).join('')}
+                    </div>
+                `;
+            }
+            
+            // 如果有下载链接（如EXE下载）
+            if (method.downloads && method.downloads.length > 0) {
+                content = `
+                    <div class="d-flex flex-wrap gap-2">
+                        ${method.downloads.map(dl => `
+                            <a href="${dl.url}" target="_blank" class="btn btn-sm" style="background: #5a67d8; color: #fff; border: none; font-size: 14px; padding: 8px 16px;">
+                                <i class="bi bi-cloud-download me-1"></i>${dl.name}
+                                ${dl.extra ? `<small style="margin-left: 4px; opacity: 0.85;">(${dl.extra})</small>` : ''}
+                            </a>
+                        `).join('')}
+                    </div>
+                `;
+            }
+            
+            return `
+                <div style="margin-bottom: 10px; border-radius: 8px; overflow: hidden; border: 1px solid #e0e0e0;">
+                    <div class="d-flex align-items-center justify-content-between" style="background: #5a67d8; color: #fff; padding: 8px 12px;">
+                        <span style="font-size: 14px; font-weight: 600;"><i class="bi ${method.icon || 'bi-box'} me-1"></i>${method.name}</span>
+                        ${method.description ? `<small style="opacity: 0.85; font-size: 13px;">${method.description}</small>` : ''}
+                    </div>
+                    <div style="background: #fff; padding: 12px;">${content}</div>
+                </div>
+            `;
+        }).join('');
+    }
+    
+    // 兼容旧格式：构建下载按钮（如果有下载地址）
+    let downloadSection = '';
+    if (!installSection && updateInfo.downloadUrl) {
+        downloadSection = `
+            <div class="d-grid gap-2 mt-4">
+                <a href="${updateInfo.downloadUrl}" target="_blank" class="btn btn-success btn-lg">
+                    <i class="bi bi-download me-2"></i>立即下载新版本
+                </a>
+            </div>
+        `;
+    }
+    
+    // 兼容旧格式：构建备用下载地址
+    let altDownloadSection = '';
+    if (!installSection && updateInfo.altDownloadUrl) {
+        altDownloadSection = `
+            <div class="text-center mt-2">
+                <a href="${updateInfo.altDownloadUrl}" target="_blank" class="text-muted small">
+                    <i class="bi bi-link-45deg me-1"></i>备用下载地址
+                </a>
+            </div>
+        `;
     }
 
     const modalHtml = `
         <div class="modal fade" id="updateModal" tabindex="-1">
-            <div class="modal-dialog modal-lg">
-                <div class="modal-content">
-                    <div class="modal-header bg-warning text-dark">
-                        <h5 class="modal-title">
-                            <i class="bi bi-arrow-up-circle me-2"></i>版本更新内容
+            <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+                <div class="modal-content" style="border: none; border-radius: 14px; overflow: hidden; box-shadow: 0 8px 32px rgba(0,0,0,0.15);">
+                    <!-- 头部 -->
+                    <div class="modal-header py-3" style="background: linear-gradient(135deg, #667eea 0%, #5a67d8 100%); border: none;">
+                        <h5 class="modal-title mb-0" style="color: #fff; font-weight: 600; font-size: 18px;">
+                            <i class="bi bi-stars me-2"></i>发现新版本
                         </h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                     </div>
-                    <div class="modal-body">
-                        <div class="alert alert-info">
-                            <i class="bi bi-info-circle me-2"></i>
-                            <strong>发现新版本！</strong>以下是最新版本的更新内容。
-                        </div>
-                        <div class="row mb-3">
-                            <div class="col-md-6">
-                                <h6><i class="bi bi-tag me-1"></i>最新版本</h6>
-                                <p class="fs-4 text-success fw-bold">${updateInfo.version}</p>
+                    <!-- 内容 -->
+                    <div class="modal-body py-4 px-4" style="background: linear-gradient(180deg, #f0f4ff 0%, #f8fafc 100%);">
+                        <!-- 版本对比 -->
+                        <div class="d-flex align-items-center justify-content-center gap-4 mb-4 p-3 rounded-3" style="background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+                            <div class="text-center">
+                                <div style="color: #666; font-size: 14px; margin-bottom: 4px;">当前</div>
+                                <div><span class="badge" style="background: #6c757d; color: #fff; font-size: 14px; padding: 6px 12px;">${LOCAL_VERSION}</span></div>
                             </div>
-                            <div class="col-md-6">
-                                <h6><i class="bi bi-calendar me-1"></i>发布日期</h6>
-                                <p class="text-muted">${updateInfo.releaseDate || '未知'}</p>
+                            <i class="bi bi-arrow-right" style="color: #28a745; font-size: 1.5rem;"></i>
+                            <div class="text-center">
+                                <div style="color: #28a745; font-size: 14px; margin-bottom: 4px;">最新</div>
+                                <div><span class="badge" style="background: linear-gradient(135deg, #28a745, #20c997); color: #fff; font-size: 14px; padding: 6px 12px;">${updateInfo.version}</span></div>
+                            </div>
+                            ${updateInfo.releaseDate ? `<span style="color: #888; font-size: 14px; margin-left: 12px;"><i class="bi bi-calendar3 me-1"></i>${updateInfo.releaseDate}</span>` : ''}
+                        </div>
+                        
+                        <!-- 版本简介 -->
+                        ${updateInfo.description ? `
+                        <div class="rounded-3 p-3 mb-3" style="background: linear-gradient(135deg, #e3f2fd, #bbdefb); color: #1565c0; font-size: 15px; line-height: 1.5;">
+                            <i class="bi bi-info-circle me-2"></i>${updateInfo.description}
+                        </div>
+                        ` : ''}
+                        
+                        <!-- 更新内容 -->
+                        <div class="mb-3">
+                            <div class="mb-2" style="color: #444; font-size: 16px; font-weight: 600;"><i class="bi bi-list-check me-2"></i>更新内容</div>
+                            <div class="rounded-3 p-3" style="max-height: 180px; overflow-y: auto; background: #fff; border: 1px solid #e8ecf0; box-shadow: inset 0 1px 3px rgba(0,0,0,0.04);">
+                                ${updateList ? `<ul class="list-unstyled mb-0">${updateList}</ul>` : '<span style="color: #999; font-size: 15px;">暂无</span>'}
                             </div>
                         </div>
-                        <hr>
-                        <h6><i class="bi bi-list-ul me-1"></i>更新内容</h6>
-                        ${updateList ? `<ul class="list-unstyled ps-3">${updateList}</ul>` : '<p class="text-muted">暂无更新内容</p>'}
+                        
+                        <!-- 重要提示 -->
+                        ${updateInfo.notice ? `
+                        <div class="rounded-3 p-3 mb-3" style="background: linear-gradient(135deg, #fff3cd, #ffeeba); color: #856404; font-size: 15px; line-height: 1.5;">
+                            <i class="bi bi-exclamation-triangle me-2"></i><strong>注意：</strong>${updateInfo.notice}
+                        </div>
+                        ` : ''}
+                        
+                        <!-- 安装方式 -->
+                        ${installSection ? `
+                        <div class="mb-2" style="color: #444; font-size: 16px; font-weight: 600;"><i class="bi bi-download me-2"></i>安装/升级方式</div>
+                        ${installSection}
+                        ` : ''}
+                        
+                        <!-- 兼容旧格式：下载按钮 -->
+                        ${downloadSection}
+                        ${altDownloadSection}
                     </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                    <!-- 底部 -->
+                    <div class="modal-footer py-3" style="background: #fff; border-top: 1px solid #e8ecf0;">
+                        <button type="button" class="btn" style="background: #f0f0f0; color: #666; border: none; font-size: 15px; padding: 8px 20px;" data-bs-dismiss="modal">
+                            <i class="bi bi-x-lg me-1"></i>稍后再说
+                        </button>
                     </div>
                 </div>
             </div>
@@ -11472,6 +11970,145 @@ async function showUpdateInfo(newVersion) {
     // 显示模态框
     const modal = new bootstrap.Modal(document.getElementById('updateModal'));
     modal.show();
+}
+
+// =============================================================================
+// 最新权益弹窗功能
+// =============================================================================
+
+/**
+ * 显示最新权益弹窗
+ */
+async function showBenefitsModal() {
+    try {
+        // 获取权益信息（使用缓存或重新请求）
+        const benefitsData = await getBenefitsInfo();
+        
+        if (!benefitsData || !benefitsData.benefits || benefitsData.benefits.length === 0) {
+            showToast('暂无权益信息', 'info');
+            return;
+        }
+        
+        // 构建权益列表
+        const benefitsList = benefitsData.benefits.map(benefit => `
+            <a href="${benefit.url}" target="_blank" class="benefit-item" style="text-decoration: none; display: block; margin-bottom: 12px; border-radius: 12px; overflow: hidden; border: 1px solid #e8ecf0; transition: all 0.3s ease; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+                <div style="background: linear-gradient(135deg, ${benefit.color || '#667eea'}20, ${benefit.color || '#667eea'}10); padding: 16px; display: flex; align-items: center; gap: 16px;">
+                    <div style="width: 50px; height: 50px; border-radius: 12px; background: ${benefit.color || '#667eea'}; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                        <i class="bi ${benefit.icon || 'bi-gift'}" style="font-size: 24px; color: #fff;"></i>
+                    </div>
+                    <div style="flex: 1;">
+                        <div style="font-size: 16px; font-weight: 600; color: #333; margin-bottom: 4px;">${benefit.name}</div>
+                        <div style="font-size: 14px; color: #666;">${benefit.description || ''}</div>
+                    </div>
+                    <i class="bi bi-arrow-right-circle" style="font-size: 20px; color: ${benefit.color || '#667eea'};"></i>
+                </div>
+            </a>
+        `).join('');
+        
+        const modalHtml = `
+            <div class="modal fade" id="benefitsModal" tabindex="-1">
+                <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+                    <div class="modal-content" style="border: none; border-radius: 16px; overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,0.15);">
+                        <!-- 头部 -->
+                        <div class="modal-header py-3" style="background: linear-gradient(135deg, #ff6b6b 0%, #feca57 50%, #48dbfb 100%); border: none;">
+                            <h5 class="modal-title mb-0" style="color: #fff; font-weight: 700; font-size: 20px; text-shadow: 0 1px 2px rgba(0,0,0,0.1);">
+                                <i class="bi bi-gift me-2"></i>最新权益 · 薅羊毛专区
+                            </h5>
+                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                        </div>
+                        <!-- 内容 -->
+                        <div class="modal-body py-4 px-4" style="background: linear-gradient(180deg, #fef9f3 0%, #f8fafc 100%);">
+                            <!-- 提示区域 -->
+                            <div class="rounded-3 p-3 mb-4" style="background: linear-gradient(135deg, #fff8e1, #ffecb3); color: #e65100; font-size: 14px; line-height: 1.6; border: 1px dashed #ffcc80;">
+                                <i class="bi bi-lightbulb me-2"></i>
+                                <strong>温馨提示：</strong>以下是精选的优质权益资源，点击即可跳转查看详情。持续更新中~
+                            </div>
+                            
+                            <!-- 权益列表 -->
+                            <div class="benefits-list">
+                                ${benefitsList}
+                            </div>
+                            
+                            <!-- 底部说明 -->
+                            <div class="text-center mt-3" style="color: #999; font-size: 13px;">
+                                <i class="bi bi-info-circle me-1"></i>
+                                以上权益由系统推荐，如有问题请联系管理员
+                            </div>
+                        </div>
+                        <!-- 底部 -->
+                        <div class="modal-footer py-3" style="background: #fff; border-top: 1px solid #e8ecf0;">
+                            <button type="button" class="btn" style="background: linear-gradient(135deg, #667eea, #764ba2); color: #fff; border: none; font-size: 15px; padding: 10px 24px; border-radius: 8px;" data-bs-dismiss="modal">
+                                <i class="bi bi-x-lg me-1"></i>关闭
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <style>
+                .benefit-item:hover {
+                    transform: translateX(5px);
+                    box-shadow: 0 4px 16px rgba(0,0,0,0.1) !important;
+                }
+            </style>
+        `;
+        
+        // 移除已存在的模态框
+        const existingModal = document.getElementById('benefitsModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
+        
+        // 添加新的模态框
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        
+        // 显示模态框
+        const modal = new bootstrap.Modal(document.getElementById('benefitsModal'));
+        modal.show();
+        
+    } catch (error) {
+        console.error('显示权益弹窗失败:', error);
+        showToast('获取权益信息失败', 'danger');
+    }
+}
+
+/**
+ * 获取权益信息（使用缓存或重新请求）
+ */
+async function getBenefitsInfo() {
+    // 如果已有缓存的远程版本信息并包含权益，直接使用
+    if (remoteVersionInfo && remoteVersionInfo.benefits) {
+        return remoteVersionInfo;
+    }
+    
+    // 否则重新请求
+    try {
+        const response = await fetch(VERSION_CHECK_URL, {
+            method: 'GET',
+            headers: {
+                'Accept': 'application/json'
+            }
+        });
+        
+        if (!response.ok) {
+            showToast('获取权益信息失败: 网络错误', 'danger');
+            return null;
+        }
+        
+        const result = await response.json();
+        
+        if (result.error || !result.success) {
+            showToast('获取权益信息失败: ' + (result.message || '未知错误'), 'danger');
+            return null;
+        }
+        
+        remoteVersionInfo = result.data;
+        return remoteVersionInfo;
+        
+    } catch (error) {
+        console.error('获取权益信息失败:', error);
+        showToast('获取权益信息失败: ' + error.message, 'danger');
+        return null;
+    }
 }
 
 // =============================================================================
@@ -11820,5 +12457,130 @@ function showAccountFaceVerificationModal(accountId, screenshot) {
 }
 
 // 注：人脸验证弹窗已复用密码登录的 passwordLoginQRModal，不再需要单独的弹窗
+
+/**
+ * 显示版本信息弹窗
+ */
+async function showVersionInfo(version) {
+    // 尝试获取远程版本信息
+    const versionInfo = await getUpdateInfo();
+    
+    // 构建项目介绍
+    const intro = versionInfo?.intro || '此版本为本人利用业余时间开发，功能可能不完善，欢迎大家提出建议和bug，我会尽快修复。此版本纯粹免费，没有任何收费项目，请大家放心使用。如果大家觉得这个项目对你有帮助，可以请我喝杯咖啡，支持我继续开发。';
+    
+    // 构建版本历史
+    let versionHistoryHtml = '';
+    if (versionInfo?.versionHistory && versionInfo.versionHistory.length > 0) {
+        versionHistoryHtml = versionInfo.versionHistory.map((item, index) => {
+            const isLatest = index === 0;
+            const bgClass = isLatest ? 'background: linear-gradient(135deg, #e8f5e9, #c8e6c9);' : 'background: #f8f9fa;';
+            const borderColor = isLatest ? 'border-left: 4px solid #28a745;' : 'border-left: 4px solid #dee2e6;';
+            const badgeStyle = isLatest ? 'background: linear-gradient(135deg, #28a745, #20c997); color: #fff;' : 'background: #6c757d; color: #fff;';
+            
+            return `
+                <div class="mb-3 p-3 rounded-3" style="${bgClass} ${borderColor}">
+                    <div class="d-flex align-items-center justify-content-between mb-2">
+                        <div>
+                            <span class="badge me-2" style="${badgeStyle} font-size: 14px; padding: 6px 12px;">${item.version}</span>
+                            ${isLatest ? '<span class="badge bg-success" style="font-size: 12px;">最新</span>' : ''}
+                        </div>
+                        ${item.date ? `<small style="color: #888; font-size: 13px;"><i class="bi bi-calendar3 me-1"></i>${item.date}</small>` : ''}
+                    </div>
+                    <ul class="mb-0 ps-3" style="font-size: 14px; line-height: 1.8; color: #444;">
+                        ${item.updates.map(u => `<li>${u}</li>`).join('')}
+                    </ul>
+                </div>
+            `;
+        }).join('');
+    } else {
+        // 兜底：使用默认的版本历史
+        versionHistoryHtml = `
+            <div class="mb-3 p-3 rounded-3" style="background: linear-gradient(135deg, #e8f5e9, #c8e6c9); border-left: 4px solid #28a745;">
+                <div class="d-flex align-items-center justify-content-between mb-2">
+                    <div>
+                        <span class="badge me-2" style="background: linear-gradient(135deg, #28a745, #20c997); color: #fff; font-size: 14px; padding: 6px 12px;">${version}</span>
+                        <span class="badge bg-success" style="font-size: 12px;">当前</span>
+                    </div>
+                </div>
+                <ul class="mb-0 ps-3" style="font-size: 14px; line-height: 1.8; color: #444;">
+                    <li>当前使用的版本</li>
+                </ul>
+            </div>
+        `;
+    }
+    
+    const modalHtml = `
+        <div class="modal fade" id="versionInfoModal" tabindex="-1">
+            <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
+                <div class="modal-content" style="border: none; border-radius: 14px; overflow: hidden; box-shadow: 0 8px 32px rgba(0,0,0,0.15);">
+                    <div class="modal-header py-3" style="background: linear-gradient(135deg, #667eea 0%, #5a67d8 100%); border: none;">
+                        <h5 class="modal-title" style="color: #fff; font-weight: 600; font-size: 18px;">
+                            <i class="bi bi-info-circle me-2"></i>版本信息
+                        </h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body py-4" style="background: linear-gradient(180deg, #f0f4ff 0%, #f8fafc 100%); max-height: 70vh;">
+                        <!-- 当前版本 -->
+                        <div class="mb-4">
+                            <h6 style="color: #444; font-size: 16px; font-weight: 600;"><i class="bi bi-tag me-2"></i>当前版本</h6>
+                            <div class="p-3 rounded-3" style="background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+                                <h4 class="mb-0" style="color: #5a67d8; font-size: 24px;">${version}</h4>
+                            </div>
+                        </div>
+                        
+                        <!-- 版本介绍 -->
+                        <div class="mb-4">
+                            <h6 style="color: #444; font-size: 16px; font-weight: 600;"><i class="bi bi-star me-2"></i>版本介绍</h6>
+                            <div class="p-3 rounded-3" style="background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.06);">
+                                <div style="font-size: 15px; line-height: 1.7; color: #555;">
+                                    <i class="bi bi-check-circle-fill text-success me-2"></i>
+                                    <strong>说明</strong>：${intro}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- 更新日志 -->
+                        <div class="mb-3">
+                            <h6 style="color: #444; font-size: 16px; font-weight: 600;"><i class="bi bi-clock-history me-2"></i>更新日志</h6>
+                            <div class="rounded-3 p-3" style="background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.06); max-height: 350px; overflow-y: auto;">
+                                ${versionHistoryHtml}
+                            </div>
+                        </div>
+                        
+                        <!-- 页脚 -->
+                        <div class="text-center mt-4">
+                            <small style="color: #888; font-size: 14px;">
+                                <i class="bi bi-github me-1"></i>
+                                闲鱼自动回复助手 | 让客服工作更轻松
+                            </small>
+                        </div>
+                    </div>
+                    <div class="modal-footer py-3" style="background: #fff; border-top: 1px solid #e8ecf0;">
+                        <button type="button" class="btn" style="background: #6c757d; color: #fff; font-size: 15px; padding: 8px 24px;" data-bs-dismiss="modal">关闭</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // 移除旧的弹窗（如果存在）
+    const oldModal = document.getElementById('versionInfoModal');
+    if (oldModal) {
+        oldModal.remove();
+    }
+
+    // 添加新弹窗到页面
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+    // 显示弹窗
+    const modal = document.getElementById('versionInfoModal');
+    const modalInstance = new bootstrap.Modal(modal);
+    modalInstance.show();
+
+    // 弹窗关闭后删除DOM元素
+    modal.addEventListener('hidden.bs.modal', function () {
+        modal.remove();
+    });
+}
 
 
