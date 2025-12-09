@@ -3,7 +3,7 @@
 # 使用方法：docker build --build-arg BASE_IMAGE=ccr.ccs.tencentyun.com/dockerp/library/python:3.11-slim-bookworm
 # ARG BASE_IMAGE=mirror.ccs.tencentyun.com/library/python:3.11-slim-bookworm
 # FROM ${BASE_IMAGE}
-FROM 3lqcg42m.mirror.aliyuncs.com/python-slim-bookworm:3.11
+FROM https://3lqcg42m.mirror.aliyuncs.com/python-slim-bookworm:3.11
 
 # 设置标签信息
 LABEL maintainer="zhinianboke"
