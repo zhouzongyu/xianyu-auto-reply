@@ -24,24 +24,33 @@ ENV DOCKER_ENV=true
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 #更换中科大源
-# RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources
+# 更换为中科大源
+RUN sed -i 's/archive.ubuntu.com/mirrors.ustc.edu.cn/g' /etc/apt/sources.list && \
+    sed -i 's/security.ubuntu.com/mirrors.ustc.edu.cn/g' /etc/apt/sources.list
+
+# 安装 Node.js 源（中科大镜像）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl \
+        ca-certificates \
+        gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    # 替换 Node.js 源为中科大镜像
+    && sed -i 's|https://deb.nodesource.com|https://mirrors.ustc.edu.cn/nodesource/deb|g' /etc/apt/sources.list.d/nodesource.list
+
 
 # 安装系统依赖（包括Playwright浏览器依赖）
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        # 基础工具
         nodejs \
         npm \
         tzdata \
         curl \
         ca-certificates \
-        # 图像处理依赖
         libjpeg-dev \
         libpng-dev \
         libfreetype6-dev \
         fonts-dejavu-core \
         fonts-liberation \
-        # Playwright浏览器依赖
         libnss3 \
         libnspr4 \
         libatk-bridge2.0-0 \
@@ -72,13 +81,59 @@ RUN apt-get update && \
         xvfb \
         x11vnc \
         fluxbox \
-        # OpenCV运行时依赖
         libgl1 \
         libglib2.0-0 \
         && apt-get clean \
         && rm -rf /var/lib/apt/lists/* \
         && rm -rf /tmp/* \
-        && rm -rf /var/tmp/*
+        && rm -rf /var/tmp/*RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        nodejs \
+        npm \
+        tzdata \
+        curl \
+        ca-certificates \
+        libjpeg-dev \
+        libpng-dev \
+        libfreetype6-dev \
+        fonts-dejavu-core \
+        fonts-liberation \
+        libnss3 \
+        libnspr4 \
+        libatk-bridge2.0-0 \
+        libdrm2 \
+        libxkbcommon0 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxrandr2 \
+        libgbm1 \
+        libxss1 \
+        libasound2 \
+        libatspi2.0-0 \
+        libgtk-3-0 \
+        libgdk-pixbuf2.0-0 \
+        libxcursor1 \
+        libxi6 \
+        libxrender1 \
+        libxext6 \
+        libx11-6 \
+        libxft2 \
+        libxinerama1 \
+        libxtst6 \
+        libappindicator3-1 \
+        libx11-xcb1 \
+        libxfixes3 \
+        xdg-utils \
+        chromium \
+        xvfb \
+        x11vnc \
+        fluxbox \
+        libgl1 \
+        libglib2.0-0 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /tmp/* \
+    && rm -rf /var/tmp/*
 
 # 设置时区
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
