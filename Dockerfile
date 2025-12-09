@@ -24,7 +24,7 @@ ENV DOCKER_ENV=true
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 #更换中科大源
-RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources
+# RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources
 
 # 安装系统依赖（包括Playwright浏览器依赖）
 RUN apt-get update && \
