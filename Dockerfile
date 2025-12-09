@@ -23,8 +23,9 @@ ENV TZ=Asia/Shanghai
 ENV DOCKER_ENV=true
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-#更换中科大源
-# 更换为中科大源
+# 1. 设置APT源（先确保目录存在）
+RUN mkdir -p /etc/apt/sources.list.d && \
+    cat << 'EOF' > /etc/apt/sources.list
 RUN sed -i 's/archive.ubuntu.com/mirrors.ustc.edu.cn/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.ustc.edu.cn/g' /etc/apt/sources.list
 
