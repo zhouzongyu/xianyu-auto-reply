@@ -2,12 +2,12 @@
 @import url('layout.css');
 @import url('dashboard.css');
 @import url('logs.css');
-@import url('keywords.css');
-@import url('accounts.css');
-@import url('items.css');
-@import url('notifications.css');
-@import url('components.css');
-@import url('admin.css');
+@import url('keywords.css?v=1.0.0');
+@import url('accounts.css?v=1.0.0');
+@import url('items.css?v=1.0.0');
+@import url('notifications.css?v=1.0.0');
+@import url('components.css?v=1.0.0');
+@import url('admin.css?v=1.0.0');
 
 
 

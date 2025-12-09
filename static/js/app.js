@@ -861,7 +861,7 @@ async function addKeyword() {
     }
 }
 
-// 渲染现代化关键词列表（分组显示）
+// 渲染现代化关键词列表（表格显示）
 function renderKeywordsList(keywords) {
     console.log('渲染关键词列表:', keywords);
     const container = document.getElementById('keywordsList');
@@ -888,102 +888,244 @@ function renderKeywordsList(keywords) {
     return;
     }
 
-    // 按回复内容和类型分组
-    const groups = groupKeywordsByReply(keywords);
+    // 创建表格
+    const tableWrapper = document.createElement('div');
+    tableWrapper.className = 'keywords-table-wrapper';
     
-    console.log(`开始渲染 ${groups.length} 个分组，共 ${keywords.length} 个关键词`);
-
-    groups.forEach((group, groupIndex) => {
-        const groupItem = document.createElement('div');
-        groupItem.className = 'keyword-group-item';
-
+    const table = document.createElement('table');
+    table.className = 'keywords-table';
+    
+    // 表头
+    const thead = document.createElement('thead');
+    thead.innerHTML = `
+        <tr>
+            <th style="width: 20%;"><i class="bi bi-tag me-1"></i>关键词</th>
+            <th style="width: 40%;"><i class="bi bi-chat-text me-1"></i>回复内容</th>
+            <th style="width: 30%;"><i class="bi bi-box-seam me-1"></i>应用范围</th>
+            <th style="width: 10%;"><i class="bi bi-gear me-1"></i>操作</th>
+        </tr>
+    `;
+    table.appendChild(thead);
+    
+    // 表体
+    const tbody = document.createElement('tbody');
+    
+    // 按关键词+回复内容分组，每个关键词-回复内容组合一行，应用范围合并显示
+    const keywordMap = new Map();
+    
+    keywords.forEach((item, index) => {
+        const keyword = item.keyword || '';
+        const reply = item.reply || '';
+        const imageUrl = item.image_url || '';
+        const type = item.type || 'text';
+        const itemId = item.item_id || '';
+        const itemTitle = item.item_title || '';
+        
+        // 使用关键词+回复内容+类型+图片URL作为唯一键
+        const key = `${keyword}|${reply}|${type}|${imageUrl}`;
+        
+        if (!keywordMap.has(key)) {
+            keywordMap.set(key, {
+                keyword: keyword,
+                reply: reply,
+                imageUrl: imageUrl,
+                type: type,
+                items: [],
+                indices: []
+            });
+        }
+        
+        const group = keywordMap.get(key);
+        group.items.push({
+            item_id: itemId,
+            item_title: itemTitle,
+            index: index
+        });
+        group.indices.push(index);
+    });
+    
+    // 为每个关键词-回复内容组合创建一行
+    keywordMap.forEach((group, key) => {
+        const row = document.createElement('tr');
+        row.className = 'keyword-table-row';
+        
         const isImageType = group.type === 'image';
-    const typeBadge = isImageType ?
-        '<span class="keyword-type-badge keyword-type-image"><i class="bi bi-image"></i> 图片</span>' :
-        '<span class="keyword-type-badge keyword-type-text"><i class="bi bi-chat-text"></i> 文本</span>';
-
-        // 回复内容显示
-        let replyDisplay = '';
-    if (isImageType) {
-            const imageUrl = group.reply || group.image_url || '';
-            replyDisplay = `
-                <div class="keyword-group-reply">
-                    <div class="d-flex align-items-center gap-3">
-                <img src="${imageUrl}" alt="关键词图片" class="keyword-image-preview" onclick="showImageModal('${imageUrl}')">
-                <div class="flex-grow-1">
-                            <strong>回复图片：</strong>
-                            <small class="text-muted d-block">点击图片查看大图</small>
-                </div>
-                    </div>
+        const replyContent = isImageType 
+            ? (group.reply || group.imageUrl || '')
+            : (group.reply || '（空回复，不自动回复）');
+        
+        // 关键词列
+        const keywordCell = document.createElement('td');
+        keywordCell.innerHTML = `
+            <div class="keyword-cell-content">
+                <span class="keyword-badge">
+                    <i class="bi bi-tag-fill"></i>
+                    ${escapeHtml(group.keyword)}
+                </span>
+                ${isImageType ? '<span class="keyword-type-badge keyword-type-image"><i class="bi bi-image"></i> 图片</span>' : '<span class="keyword-type-badge keyword-type-text"><i class="bi bi-chat-text"></i> 文本</span>'}
+            </div>
+        `;
+        
+        // 回复内容列
+        const replyCell = document.createElement('td');
+        if (isImageType) {
+            replyCell.innerHTML = `
+                <div class="reply-cell-content">
+                    <img src="${replyContent}" alt="关键词图片" class="keyword-image-preview" onclick="showImageModal('${replyContent}')">
+                    <span class="text-muted small">点击图片查看大图</span>
                 </div>
             `;
-    } else {
-            replyDisplay = `
-                <div class="keyword-group-reply">
-                    <strong>回复内容：</strong>
-                    <span class="reply-text-content">${group.reply || '<span class="text-muted">（空回复，不自动回复）</span>'}</span>
+        } else {
+            replyCell.innerHTML = `
+                <div class="reply-cell-content">
+                    <span class="reply-text">${escapeHtml(replyContent)}</span>
                 </div>
             `;
-    }
-
-        // 关键词列表
-        const keywordsList = group.keywords.map((kw, kwIndex) => `
-            <span class="keyword-chip">
-            <i class="bi bi-tag-fill"></i>
-                ${kw}
-                <button class="chip-remove-btn" onclick="deleteSpecificKeyword('${group.id}', ${kwIndex})" title="删除此关键词">
-                    <i class="bi bi-x"></i>
-            </button>
-            </span>
-        `).join('');
-
-        // 商品列表
-        const itemsList = group.items.map((itemInfo, itemIndex) => {
+        }
+        
+        // 应用范围列 - 显示所有商品
+        const itemCell = document.createElement('td');
+        const itemsHtml = group.items.map((itemInfo, itemIndex) => {
             const itemName = getItemName(itemInfo.item_id, itemInfo.item_title);
             const displayText = itemInfo.item_id ? 
                 `${itemInfo.item_id} - ${itemName}` : 
                 '通用关键词（所有商品）';
             const icon = itemInfo.item_id ? 'bi-box' : 'bi-globe';
-            
             return `
-                <span class="item-chip">
+                <span class="item-badge" style="margin-right: 0.5rem; margin-bottom: 0.5rem; display: inline-block;">
                     <i class="bi ${icon}"></i>
-                    ${displayText}
-                    <button class="chip-remove-btn" onclick="deleteSpecificItem('${group.id}', ${itemIndex})" title="删除此商品配置">
+                    ${escapeHtml(displayText)}
+                    <button class="chip-remove-btn" onclick="deleteKeywordByIndex(${itemInfo.index})" title="删除此商品配置">
                         <i class="bi bi-x"></i>
-            </button>
+                    </button>
                 </span>
             `;
         }).join('');
-
-        groupItem.innerHTML = `
-            <div class="keyword-group-header">
-                <div class="keyword-group-title">
-                    ${typeBadge}
-                    <span class="keyword-count-badge">${group.keywords.length}个关键词 × ${group.items.length}个应用 = ${group.keywords.length * group.items.length}条配置</span>
-        </div>
-        </div>
-            ${replyDisplay}
-            <div class="keyword-group-content">
-                <div class="keyword-section">
-                    <div class="section-title"><i class="bi bi-tags"></i> 触发关键词</div>
-                    <div class="chips-container">
-                        ${keywordsList}
-                    </div>
-                </div>
-                <div class="item-section">
-                    <div class="section-title"><i class="bi bi-box-seam"></i> 应用范围</div>
-                    <div class="chips-container">
-                        ${itemsList}
-                    </div>
-                </div>
-        </div>
-    `;
+        itemCell.innerHTML = `<div class="item-cell-content">${itemsHtml}</div>`;
         
-        container.appendChild(groupItem);
+        // 操作列
+        const actionCell = document.createElement('td');
+        actionCell.className = 'action-cell';
+        actionCell.innerHTML = `
+            <div class="action-buttons">
+                <button class="btn-action btn-delete" onclick="deleteKeywordGroup('${key}')" title="删除整组">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </div>
+        `;
+        
+        row.appendChild(keywordCell);
+        row.appendChild(replyCell);
+        row.appendChild(itemCell);
+        row.appendChild(actionCell);
+        
+        tbody.appendChild(row);
     });
-
+    
+    table.appendChild(tbody);
+    tableWrapper.appendChild(table);
+    container.appendChild(tableWrapper);
+    
     console.log('关键词列表渲染完成');
+}
+
+// 根据索引删除关键词
+async function deleteKeywordByIndex(index) {
+    const keywords = keywordsData[currentCookieId] || [];
+    if (index < 0 || index >= keywords.length) {
+        showToast('无效的索引', 'warning');
+        return;
+    }
+    
+    const item = keywords[index];
+    const keyword = item.keyword || '';
+    const itemName = item.item_id ? 
+        `${item.item_id} - ${getItemName(item.item_id, item.item_title)}` : 
+        '通用关键词（所有商品）';
+    
+    if (!confirm(`确定要删除关键词 "${keyword}" 在 "${itemName}" 的配置吗？`)) {
+        return;
+    }
+    
+    try {
+        toggleLoading(true);
+        
+        const response = await fetch(`${apiBase}/keywords/${currentCookieId}/${index}`, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        
+        if (response.ok) {
+            showToast('删除成功', 'success');
+            await refreshKeywordsList();
+        } else {
+            const error = await response.text();
+            showToast(`删除失败: ${error}`, 'danger');
+        }
+    } catch (error) {
+        console.error('删除关键词失败:', error);
+        showToast('删除关键词失败', 'danger');
+    } finally {
+        toggleLoading(false);
+    }
+}
+
+// 删除整组关键词（相同关键词+回复内容的所有配置）
+async function deleteKeywordGroup(key) {
+    const keywords = keywordsData[currentCookieId] || [];
+    const [keyword, reply, type, imageUrl] = key.split('|');
+    
+    const matchingItems = [];
+    keywords.forEach((item, index) => {
+        if (item.keyword === keyword &&
+            (item.reply || '') === reply &&
+            (item.type || 'text') === type &&
+            (item.image_url || '') === imageUrl) {
+            matchingItems.push({ item, index });
+        }
+    });
+    
+    if (matchingItems.length === 0) {
+        showToast('找不到要删除的关键词配置', 'warning');
+        return;
+    }
+    
+    const itemCount = matchingItems.length;
+    if (!confirm(`确定要删除关键词 "${keyword}" 的所有 ${itemCount} 条配置吗？`)) {
+        return;
+    }
+    
+    try {
+        toggleLoading(true);
+        
+        // 从后往前删除，避免索引变化
+        matchingItems.sort((a, b) => b.index - a.index);
+        
+        for (const { index } of matchingItems) {
+            const response = await fetch(`${apiBase}/keywords/${currentCookieId}/${index}`, {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `Bearer ${authToken}`
+                }
+            });
+            
+            if (!response.ok) {
+                const error = await response.text();
+                showToast(`删除失败: ${error}`, 'danger');
+                return;
+            }
+        }
+        
+        showToast(`成功删除 ${itemCount} 条配置`, 'success');
+        await refreshKeywordsList();
+    } catch (error) {
+        console.error('删除关键词失败:', error);
+        showToast('删除关键词失败', 'danger');
+    } finally {
+        toggleLoading(false);
+    }
 }
 
 // 按回复内容分组关键词
@@ -1064,7 +1206,8 @@ function getItemName(itemId, itemTitle) {
 
 // 聚焦到关键词输入框
 function focusKeywordInput() {
-    document.getElementById('newKeyword').focus();
+    // 改为打开添加文本关键词弹窗
+    showAddTextKeywordModal();
 }
 
 // 编辑关键词 - 改进版本
@@ -2262,12 +2405,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     });
 
-    document.getElementById('newReply')?.addEventListener('keypress', function(e) {
-    if (e.key === 'Enter') {
-        e.preventDefault();
-        addKeyword();
-    }
-    });
+    // 移除旧的输入框事件监听器（因为已经改为弹窗方式）
 
     // ESC键取消编辑
     document.addEventListener('keydown', function(e) {
@@ -8035,6 +8173,196 @@ function refreshQRCode() {
 // ==================== 图片关键词管理功能 ====================
 
 // 显示添加图片关键词模态框
+// 显示添加文本关键词模态框
+function showAddTextKeywordModal() {
+    if (!currentCookieId) {
+        showToast('请先选择账号', 'warning');
+        return;
+    }
+
+    // 加载商品列表到文本关键词模态框
+    loadItemsListForTextKeyword();
+
+    // 显示模态框
+    const modal = new bootstrap.Modal(document.getElementById('addTextKeywordModal'));
+    modal.show();
+
+    // 清空表单
+    document.getElementById('textKeyword').value = '';
+    document.getElementById('textReply').value = '';
+    const textSelectElement = document.getElementById('textItemIdSelect');
+    if (textSelectElement) {
+        // 清除所有选中项
+        Array.from(textSelectElement.options).forEach(opt => opt.selected = false);
+    }
+}
+
+// 为文本关键词模态框加载商品列表
+async function loadItemsListForTextKeyword() {
+    try {
+        const response = await fetch(`${apiBase}/items/${currentCookieId}`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            const items = data.items || [];
+
+            // 更新商品选择下拉框
+            const selectElement = document.getElementById('textItemIdSelect');
+            if (selectElement) {
+                // 清空现有选项（保留第一个默认选项）
+                selectElement.innerHTML = '<option value="">通用关键词（不选择任何商品）</option>';
+
+                // 添加商品选项
+                items.forEach(item => {
+                    const option = document.createElement('option');
+                    option.value = item.item_id;
+                    option.textContent = `${item.item_id} - ${item.item_title}`;
+                    selectElement.appendChild(option);
+                });
+            }
+
+            console.log(`为文本关键词加载了 ${items.length} 个商品到选择列表`);
+        } else {
+            console.warn('加载商品列表失败:', response.status);
+        }
+    } catch (error) {
+        console.error('加载商品列表时发生错误:', error);
+    }
+}
+
+// 添加文本关键词
+async function addTextKeyword() {
+    const keywordInput = document.getElementById('textKeyword').value.trim();
+    const reply = document.getElementById('textReply').value.trim();
+    const selectElement = document.getElementById('textItemIdSelect');
+    const selectedOptions = Array.from(selectElement.selectedOptions);
+
+    if (!keywordInput) {
+        showToast('请填写关键词', 'warning');
+        return;
+    }
+
+    if (!currentCookieId) {
+        showToast('请先选择账号', 'warning');
+        return;
+    }
+
+    try {
+        toggleLoading(true);
+
+        // 解析多个关键词（支持竖线、换行符分隔）
+        const keywords = keywordInput
+            .split(/[\|\n]/)
+            .map(k => k.trim())
+            .filter(k => k.length > 0);
+        
+        if (keywords.length === 0) {
+            showToast('请填写有效的关键词', 'warning');
+            toggleLoading(false);
+            return;
+        }
+
+        // 获取选中的商品ID列表
+        let itemIds = selectedOptions
+            .map(opt => opt.value)
+            .filter(id => id !== ''); // 过滤掉空值（通用关键词选项）
+        
+        // 如果没有选中任何商品，或者选中了空值，则作为通用关键词
+        if (itemIds.length === 0) {
+            itemIds = [''];
+        }
+
+        // 获取当前关键词列表
+        let currentKeywords = [...(keywordsData[currentCookieId] || [])];
+        let textKeywords = currentKeywords.filter(item => (item.type || 'text') === 'text');
+
+        // 检查重复关键词
+        const duplicates = [];
+        for (const keyword of keywords) {
+            for (const itemId of itemIds) {
+                const existingKeyword = currentKeywords.find(item =>
+                    item.keyword === keyword &&
+                    (item.item_id || '') === (itemId || '')
+                );
+                if (existingKeyword) {
+                    const itemIdText = itemId ? `（商品ID: ${itemId}）` : '（通用关键词）';
+                    duplicates.push(`"${keyword}" ${itemIdText}`);
+                }
+            }
+        }
+
+        if (duplicates.length > 0) {
+            showToast(`以下关键词已存在：\n${duplicates.join('\n')}\n请修改后重试`, 'warning');
+            toggleLoading(false);
+            return;
+        }
+
+        // 展开添加多个关键词和多个商品ID的组合
+        for (const keyword of keywords) {
+            for (const itemId of itemIds) {
+                const newKeyword = {
+                    keyword: keyword,
+                    reply: reply,
+                    item_id: itemId || ''
+                };
+                textKeywords.push(newKeyword);
+            }
+        }
+
+        const response = await fetch(`${apiBase}/keywords-with-item-id/${currentCookieId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({
+                keywords: textKeywords
+            })
+        });
+
+        if (response.ok) {
+            const totalAdded = keywords.length * itemIds.length;
+            const keywordText = keywords.length > 1 ? `${keywords.length}个关键词` : `"${keywords[0]}"`;
+            const itemText = itemIds.length > 1 ? `${itemIds.length}个商品` : (itemIds[0] ? '指定商品' : '通用');
+            showToast(`✨ ${keywordText} 添加成功！（共${totalAdded}条配置，应用于${itemText}）`, 'success');
+
+            // 关闭模态框
+            const modal = bootstrap.Modal.getInstance(document.getElementById('addTextKeywordModal'));
+            modal.hide();
+
+            // 只刷新关键词列表，不重新加载整个界面
+            await refreshKeywordsList();
+        } else {
+            try {
+                const errorData = await response.json();
+                const errorMessage = errorData.detail || '关键词添加失败';
+                console.error('关键词添加失败:', errorMessage);
+
+                // 检查是否是重复关键词的错误
+                if (errorMessage.includes('关键词已存在') || errorMessage.includes('关键词重复') || errorMessage.includes('UNIQUE constraint')) {
+                    showToast(`❌ 关键词重复：${errorMessage}`, 'warning');
+                } else {
+                    showToast(`❌ ${errorMessage}`, 'danger');
+                }
+            } catch (parseError) {
+                // 如果无法解析JSON，使用原始文本
+                const errorText = await response.text();
+                console.error('关键词添加失败:', errorText);
+                showToast('❌ 关键词添加失败', 'danger');
+            }
+        }
+    } catch (error) {
+        console.error('添加关键词失败:', error);
+        showToast('添加关键词失败', 'danger');
+    } finally {
+        toggleLoading(false);
+    }
+}
+
 function showAddImageKeywordModal() {
     if (!currentCookieId) {
         showToast('请先选择账号', 'warning');
