@@ -1,8 +1,9 @@
 # 使用Python 3.11作为基础镜像
 # 支持通过构建参数指定镜像源（解决多架构构建时的网络问题）
 # 使用方法：docker build --build-arg BASE_IMAGE=ccr.ccs.tencentyun.com/dockerp/library/python:3.11-slim-bookworm
-ARG BASE_IMAGE=mirror.ccs.tencentyun.com/library/python:3.11-slim-bookworm
-FROM ${BASE_IMAGE}
+# ARG BASE_IMAGE=mirror.ccs.tencentyun.com/library/python:3.11-slim-bookworm
+# FROM ${BASE_IMAGE}
+FROM crpi-9ouhf0ah4act929o.cn-beijing.personal.cr.aliyuncs.com/yyds-software/python-slim-bookworm:3.11
 
 
 # 设置标签信息
