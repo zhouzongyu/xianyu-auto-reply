@@ -393,8 +393,9 @@
                     <th style="width: 7%">状态</th>
                     <th style="width: 8%">默认回复</th>
                     <th style="width: 8%">AI回复</th>
-                    <th style="width: 9%">自动确认发货</th>
-                    <th style="width: 10%">备注</th>
+                    <th style="width: 8%">自动确认发货</th>
+                    <th style="width: 10%">自动好评</th>
+                    <th style="width: 9%">备注</th>
                     <th style="width: 10%">
                       暂停时间
                       <i class="bi bi-question-circle ms-1"
@@ -3789,6 +3790,49 @@
                 使用用户名密码登录的时候浏览器可见，仅限Windows源码部署打开该开关，开关打开密码登录会停留5分钟，防止第一次登录需要人脸，成功一次之后后续可关闭开关
               </div>
             </div>
+
+            <!-- 代理配置 -->
+            <hr class="my-4">
+            <h6 class="mb-3">
+              <i class="bi bi-globe me-2"></i>代理配置
+              <span class="badge bg-info ms-2">IP隔离</span>
+            </h6>
+            
+            <div class="row mb-3">
+              <div class="col-md-4">
+                <label class="form-label">代理类型</label>
+                <select class="form-select" id="editProxyType" onchange="toggleProxyFields()">
+                  <option value="none">不使用代理</option>
+                  <option value="http">HTTP代理</option>
+                  <option value="https">HTTPS代理</option>
+                  <option value="socks5">SOCKS5代理</option>
+                </select>
+              </div>
+              <div class="col-md-5" id="proxyHostGroup" style="display: none;">
+                <label class="form-label">代理地址</label>
+                <input type="text" class="form-control" id="editProxyHost" placeholder="例如: 127.0.0.1">
+              </div>
+              <div class="col-md-3" id="proxyPortGroup" style="display: none;">
+                <label class="form-label">代理端口</label>
+                <input type="number" class="form-control" id="editProxyPort" placeholder="例如: 1080">
+              </div>
+            </div>
+            
+            <div class="row mb-3" id="proxyAuthGroup" style="display: none;">
+              <div class="col-md-6">
+                <label class="form-label">代理用户名（可选）</label>
+                <input type="text" class="form-control" id="editProxyUser" placeholder="代理认证用户名">
+              </div>
+              <div class="col-md-6">
+                <label class="form-label">代理密码（可选）</label>
+                <input type="password" class="form-control" id="editProxyPass" placeholder="代理认证密码">
+              </div>
+            </div>
+            
+            <div class="form-text mb-3">
+              <i class="bi bi-shield-check me-1"></i>
+              配置代理后，此账号的所有网络请求将通过代理服务器进行，实现IP隔离，降低账号关联风险
+            </div>
             
             <div class="alert alert-info">
               <i class="bi bi-info-circle me-2"></i>
@@ -3796,7 +3840,8 @@
               <ul class="mb-0 mt-2">
                 <li>Cookie是必填项，其他字段可选</li>
                 <li>配置用户名和密码后，系统可自动通过密码登录刷新Cookie</li>
-                <li>使用用户名密码登录的时候浏览器可见，仅限Windows源码部署打开该开关，开关打开密码登录会停留5分钟，防止第一次登录需要人脸，成功一次之后后续可关闭开关</li>
+                <li>使用用户名密码登录的时候浏览器可见，仅限Windows源码部署打开该开关</li>
+                <li><strong>代理配置：</strong>为每个账号设置独立代理，可实现IP隔离，降低账号关联风险</li>
               </ul>
             </div>
           </form>

@@ -10,6 +10,7 @@ AI回复引擎模块
 """
 
 import os
+import sys
 import json
 import time
 import sqlite3

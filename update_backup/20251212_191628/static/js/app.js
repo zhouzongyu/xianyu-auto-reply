@@ -12199,11 +12199,8 @@ async function showProjectStats() {
     }
 }
 
-// 默认版本号（当无法读取 version.txt 时使用）
-const DEFAULT_VERSION = 'v1.0.0';
-
-// 当前本地版本号（动态从 version.txt 读取）
-let LOCAL_VERSION = DEFAULT_VERSION;
+// 当前本地版本号（硬编码）
+const LOCAL_VERSION = 'v1.0.7';
 
 // 远程版本检查API地址（请修改为您的PHP地址）
 const VERSION_CHECK_URL = 'http://116.196.116.76/version.php';
@@ -12216,20 +12213,18 @@ let remoteVersionInfo = null;
  */
 async function loadSystemVersion() {
     try {
-        // 先从 version.txt 动态读取本地版本号
+        // 显示当前本地版本
+        document.getElementById('versionNumber').textContent = LOCAL_VERSION;
+
         try {
-            const versionResponse = await fetch('/static/version.txt?t=' + Date.now());
+            const versionResponse = await fetch('/static/version.txt');
             if (versionResponse.ok) {
-                LOCAL_VERSION = (await versionResponse.text()).trim();
-                currentSystemVersion = LOCAL_VERSION;
+                currentSystemVersion = (await versionResponse.text()).trim();
             }
         } catch (e) {
             console.warn('无法读取本地版本文件，使用默认版本');
-            LOCAL_VERSION = DEFAULT_VERSION;
         }
-        
-        // 显示当前本地版本
-        document.getElementById('versionNumber').textContent = LOCAL_VERSION;
+        document.getElementById('versionNumber').textContent = currentSystemVersion;
         
         // 添加点击事件，显示版本信息
         const systemVersionBadge = document.getElementById('systemVersion');

@@ -1,4 +1,4 @@
-import sqlite3
+import sqlite3  
 import os
 import threading
 import hashlib
@@ -222,6 +222,7 @@ class DBManager:
                 order_id TEXT PRIMARY KEY,
                 item_id TEXT,
                 buyer_id TEXT,
+                sid TEXT,
                 spec_name TEXT,
                 spec_value TEXT,
                 quantity TEXT,
@@ -233,6 +234,16 @@ class DBManager:
                 FOREIGN KEY (cookie_id) REFERENCES cookies(id) ON DELETE CASCADE
             )
             ''')
+            
+            # 检查并添加 sid 列到 orders 表（用于简化消息查找订单）
+            try:
+                self._execute_sql(cursor, "SELECT sid FROM orders LIMIT 1")
+            except sqlite3.OperationalError:
+                # sid 列不存在，需要添加
+                logger.info("正在为 orders 表添加 sid 列...")
+                self._execute_sql(cursor, "ALTER TABLE orders ADD COLUMN sid TEXT")
+                self._execute_sql(cursor, "CREATE INDEX IF NOT EXISTS idx_orders_sid ON orders(sid)")
+                logger.info("orders 表 sid 列添加完成")
 
             # 检查并添加 user_id 列（用于数据库迁移）
             try:
@@ -405,6 +416,21 @@ class DBManager:
             )
             ''')
 
+            # 创建好评模板表
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS comment_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cookie_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                content TEXT NOT NULL,
+                is_active BOOLEAN DEFAULT FALSE,
+                sort_order INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (cookie_id) REFERENCES cookies(id) ON DELETE CASCADE
+            )
+            ''')
+
             # 创建风控日志表
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS risk_control_logs (
@@ -479,6 +505,12 @@ class DBManager:
                 logger.info("添加cookies表的pause_duration列...")
                 cursor.execute("ALTER TABLE cookies ADD COLUMN pause_duration INTEGER DEFAULT 10")
                 logger.info("数据库迁移完成：添加pause_duration列")
+
+            # 检查cookies表是否存在auto_comment列
+            if 'auto_comment' not in cookie_columns:
+                logger.info("添加cookies表的auto_comment列...")
+                cursor.execute("ALTER TABLE cookies ADD COLUMN auto_comment INTEGER DEFAULT 0")
+                logger.info("数据库迁移完成：添加auto_comment列")
 
         except Exception as e:
             logger.error(f"数据库迁移失败: {e}")
@@ -602,6 +634,13 @@ class DBManager:
                 self.upgrade_cookies_table_for_account_login(cursor)
                 self.set_system_setting("db_version", "1.5", "数据库版本号")
                 logger.info("数据库升级到版本1.5完成")
+
+            # 升级到版本1.6 - 为cookies表添加代理配置字段
+            if current_version < "1.6":
+                logger.info("开始升级数据库到版本1.6...")
+                self.upgrade_cookies_table_for_proxy(cursor)
+                self.set_system_setting("db_version", "1.6", "数据库版本号")
+                logger.info("数据库升级到版本1.6完成")
 
             # 迁移遗留数据（在所有版本升级完成后执行）
             self.migrate_legacy_data(cursor)
@@ -956,6 +995,62 @@ class DBManager:
             logger.error(f"升级cookies表账号登录字段失败: {e}")
             raise
 
+    def upgrade_cookies_table_for_proxy(self, cursor):
+        """升级cookies表支持代理配置功能"""
+        try:
+            logger.info("开始为cookies表添加代理配置相关字段...")
+
+            # 为cookies表添加proxy_type字段（代理类型：none/http/https/socks5）
+            try:
+                self._execute_sql(cursor, "SELECT proxy_type FROM cookies LIMIT 1")
+                logger.info("cookies表proxy_type字段已存在")
+            except sqlite3.OperationalError:
+                self._execute_sql(cursor, "ALTER TABLE cookies ADD COLUMN proxy_type TEXT DEFAULT 'none'")
+                logger.info("为cookies表添加proxy_type字段")
+
+            # 为cookies表添加proxy_host字段（代理服务器地址）
+            try:
+                self._execute_sql(cursor, "SELECT proxy_host FROM cookies LIMIT 1")
+                logger.info("cookies表proxy_host字段已存在")
+            except sqlite3.OperationalError:
+                self._execute_sql(cursor, "ALTER TABLE cookies ADD COLUMN proxy_host TEXT DEFAULT ''")
+                logger.info("为cookies表添加proxy_host字段")
+
+            # 为cookies表添加proxy_port字段（代理端口）
+            try:
+                self._execute_sql(cursor, "SELECT proxy_port FROM cookies LIMIT 1")
+                logger.info("cookies表proxy_port字段已存在")
+            except sqlite3.OperationalError:
+                self._execute_sql(cursor, "ALTER TABLE cookies ADD COLUMN proxy_port INTEGER DEFAULT 0")
+                logger.info("为cookies表添加proxy_port字段")
+
+            # 为cookies表添加proxy_user字段（代理认证用户名）
+            try:
+                self._execute_sql(cursor, "SELECT proxy_user FROM cookies LIMIT 1")
+                logger.info("cookies表proxy_user字段已存在")
+            except sqlite3.OperationalError:
+                self._execute_sql(cursor, "ALTER TABLE cookies ADD COLUMN proxy_user TEXT DEFAULT ''")
+                logger.info("为cookies表添加proxy_user字段")
+
+            # 为cookies表添加proxy_pass字段（代理认证密码）
+            try:
+                self._execute_sql(cursor, "SELECT proxy_pass FROM cookies LIMIT 1")
+                logger.info("cookies表proxy_pass字段已存在")
+            except sqlite3.OperationalError:
+                self._execute_sql(cursor, "ALTER TABLE cookies ADD COLUMN proxy_pass TEXT DEFAULT ''")
+                logger.info("为cookies表添加proxy_pass字段")
+
+            logger.info("✅ cookies表代理配置字段升级完成")
+            logger.info("   - proxy_type: 代理类型 (none/http/https/socks5)")
+            logger.info("   - proxy_host: 代理服务器地址")
+            logger.info("   - proxy_port: 代理端口")
+            logger.info("   - proxy_user: 代理认证用户名（可选）")
+            logger.info("   - proxy_pass: 代理认证密码（可选）")
+            return True
+        except Exception as e:
+            logger.error(f"升级cookies表代理配置字段失败: {e}")
+            raise
+
     def migrate_legacy_data(self, cursor):
         """迁移遗留数据到新表结构"""
         try:
@@ -1265,11 +1360,16 @@ class DBManager:
                 return None
 
     def get_cookie_details(self, cookie_id: str) -> Optional[Dict[str, any]]:
-        """获取Cookie的详细信息，包括user_id、auto_confirm、remark、pause_duration、username、password和show_browser"""
+        """获取Cookie的详细信息，包括user_id、auto_confirm、remark、pause_duration、username、password、show_browser和代理配置"""
         with self.lock:
             try:
                 cursor = self.conn.cursor()
-                self._execute_sql(cursor, "SELECT id, value, user_id, auto_confirm, remark, pause_duration, username, password, show_browser, created_at FROM cookies WHERE id = ?", (cookie_id,))
+                self._execute_sql(cursor, """
+                    SELECT id, value, user_id, auto_confirm, remark, pause_duration, 
+                           username, password, show_browser, created_at,
+                           proxy_type, proxy_host, proxy_port, proxy_user, proxy_pass
+                    FROM cookies WHERE id = ?
+                """, (cookie_id,))
                 result = cursor.fetchone()
                 if result:
                     return {
@@ -1282,7 +1382,13 @@ class DBManager:
                         'username': result[6] or '',
                         'password': result[7] or '',
                         'show_browser': bool(result[8]) if result[8] is not None else False,
-                        'created_at': result[9]
+                        'created_at': result[9],
+                        # 代理配置
+                        'proxy_type': result[10] or 'none',
+                        'proxy_host': result[11] or '',
+                        'proxy_port': result[12] or 0,
+                        'proxy_user': result[13] or '',
+                        'proxy_pass': result[14] or ''
                     }
                 return None
             except Exception as e:
@@ -1440,6 +1546,110 @@ class DBManager:
                 self.conn.rollback()
                 return False
 
+    def update_cookie_proxy_config(self, cookie_id: str, proxy_type: str = None, proxy_host: str = None, 
+                                     proxy_port: int = None, proxy_user: str = None, proxy_pass: str = None) -> bool:
+        """更新Cookie的代理配置
+        
+        Args:
+            cookie_id: Cookie ID
+            proxy_type: 代理类型 (none/http/https/socks5)
+            proxy_host: 代理服务器地址
+            proxy_port: 代理端口
+            proxy_user: 代理认证用户名（可选）
+            proxy_pass: 代理认证密码（可选）
+        """
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                # 检查记录是否存在
+                self._execute_sql(cursor, "SELECT id FROM cookies WHERE id = ?", (cookie_id,))
+                if not cursor.fetchone():
+                    logger.warning(f"账号 {cookie_id} 不存在，无法更新代理配置")
+                    return False
+                
+                # 构建动态SQL更新语句
+                update_fields = []
+                params = []
+                
+                if proxy_type is not None:
+                    update_fields.append("proxy_type = ?")
+                    params.append(proxy_type)
+                
+                if proxy_host is not None:
+                    update_fields.append("proxy_host = ?")
+                    params.append(proxy_host)
+                
+                if proxy_port is not None:
+                    update_fields.append("proxy_port = ?")
+                    params.append(proxy_port)
+                
+                if proxy_user is not None:
+                    update_fields.append("proxy_user = ?")
+                    params.append(proxy_user)
+                
+                if proxy_pass is not None:
+                    update_fields.append("proxy_pass = ?")
+                    params.append(proxy_pass)
+                
+                if not update_fields:
+                    logger.warning(f"更新账号 {cookie_id} 代理配置时没有提供任何更新字段")
+                    return False
+                
+                params.append(cookie_id)
+                sql = f"UPDATE cookies SET {', '.join(update_fields)} WHERE id = ?"
+                
+                self._execute_sql(cursor, sql, tuple(params))
+                self.conn.commit()
+                logger.info(f"更新账号 {cookie_id} 代理配置成功: type={proxy_type}, host={proxy_host}, port={proxy_port}")
+                return True
+            except Exception as e:
+                logger.error(f"更新代理配置失败: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                self.conn.rollback()
+                return False
+
+    def get_cookie_proxy_config(self, cookie_id: str) -> Dict[str, any]:
+        """获取Cookie的代理配置
+        
+        Returns:
+            包含代理配置的字典，如果账号不存在则返回默认配置
+        """
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                self._execute_sql(cursor, """
+                    SELECT proxy_type, proxy_host, proxy_port, proxy_user, proxy_pass
+                    FROM cookies WHERE id = ?
+                """, (cookie_id,))
+                result = cursor.fetchone()
+                if result:
+                    return {
+                        'proxy_type': result[0] or 'none',
+                        'proxy_host': result[1] or '',
+                        'proxy_port': result[2] or 0,
+                        'proxy_user': result[3] or '',
+                        'proxy_pass': result[4] or ''
+                    }
+                # 返回默认配置
+                return {
+                    'proxy_type': 'none',
+                    'proxy_host': '',
+                    'proxy_port': 0,
+                    'proxy_user': '',
+                    'proxy_pass': ''
+                }
+            except Exception as e:
+                logger.error(f"获取代理配置失败: {e}")
+                return {
+                    'proxy_type': 'none',
+                    'proxy_host': '',
+                    'proxy_port': 0,
+                    'proxy_user': '',
+                    'proxy_pass': ''
+                }
+
     def get_auto_confirm(self, cookie_id: str) -> bool:
         """获取Cookie的自动确认发货设置"""
         with self.lock:
@@ -1453,6 +1663,199 @@ class DBManager:
             except Exception as e:
                 logger.error(f"获取自动确认发货设置失败: {e}")
                 return True  # 出错时默认开启
+
+    # -------------------- 自动好评操作 --------------------
+    def get_auto_comment(self, cookie_id: str) -> bool:
+        """获取Cookie的自动好评设置"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                self._execute_sql(cursor, "SELECT auto_comment FROM cookies WHERE id = ?", (cookie_id,))
+                result = cursor.fetchone()
+                if result and result[0] is not None:
+                    return bool(result[0])
+                return False  # 默认关闭
+            except Exception as e:
+                logger.error(f"获取自动好评设置失败: {e}")
+                return False  # 出错时默认关闭
+
+    def update_auto_comment(self, cookie_id: str, auto_comment: bool) -> bool:
+        """更新Cookie的自动好评设置"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                self._execute_sql(cursor, "UPDATE cookies SET auto_comment = ? WHERE id = ?", (int(auto_comment), cookie_id))
+                self.conn.commit()
+                logger.info(f"更新账号 {cookie_id} 自动好评设置: {'开启' if auto_comment else '关闭'}")
+                return True
+            except Exception as e:
+                logger.error(f"更新自动好评设置失败: {e}")
+                return False
+
+    def get_comment_templates(self, cookie_id: str) -> List[Dict]:
+        """获取账号的好评模板列表"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                self._execute_sql(cursor, """
+                    SELECT id, name, content, is_active, sort_order, created_at, updated_at 
+                    FROM comment_templates 
+                    WHERE cookie_id = ? 
+                    ORDER BY sort_order, id
+                """, (cookie_id,))
+                results = cursor.fetchall()
+                templates = []
+                for row in results:
+                    templates.append({
+                        'id': row[0],
+                        'name': row[1],
+                        'content': row[2],
+                        'is_active': bool(row[3]),
+                        'sort_order': row[4],
+                        'created_at': row[5],
+                        'updated_at': row[6]
+                    })
+                return templates
+            except Exception as e:
+                logger.error(f"获取好评模板列表失败: {e}")
+                return []
+
+    def get_active_comment_template(self, cookie_id: str) -> Optional[Dict]:
+        """获取账号当前激活的好评模板"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                self._execute_sql(cursor, """
+                    SELECT id, name, content, is_active, sort_order, created_at, updated_at 
+                    FROM comment_templates 
+                    WHERE cookie_id = ? AND is_active = 1 
+                    LIMIT 1
+                """, (cookie_id,))
+                result = cursor.fetchone()
+                if result:
+                    return {
+                        'id': result[0],
+                        'name': result[1],
+                        'content': result[2],
+                        'is_active': bool(result[3]),
+                        'sort_order': result[4],
+                        'created_at': result[5],
+                        'updated_at': result[6]
+                    }
+                return None
+            except Exception as e:
+                logger.error(f"获取激活的好评模板失败: {e}")
+                return None
+
+    def add_comment_template(self, cookie_id: str, name: str, content: str, is_active: bool = False) -> Optional[int]:
+        """添加好评模板"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                # 如果设置为激活状态，先将其他模板设为非激活
+                if is_active:
+                    self._execute_sql(cursor, "UPDATE comment_templates SET is_active = 0 WHERE cookie_id = ?", (cookie_id,))
+                
+                # 获取最大排序号
+                self._execute_sql(cursor, "SELECT MAX(sort_order) FROM comment_templates WHERE cookie_id = ?", (cookie_id,))
+                max_order = cursor.fetchone()[0]
+                sort_order = (max_order or 0) + 1
+                
+                self._execute_sql(cursor, """
+                    INSERT INTO comment_templates (cookie_id, name, content, is_active, sort_order) 
+                    VALUES (?, ?, ?, ?, ?)
+                """, (cookie_id, name, content, int(is_active), sort_order))
+                
+                template_id = cursor.lastrowid
+                self.conn.commit()
+                logger.info(f"添加好评模板成功: cookie_id={cookie_id}, name={name}, id={template_id}")
+                return template_id
+            except Exception as e:
+                logger.error(f"添加好评模板失败: {e}")
+                self.conn.rollback()
+                return None
+
+    def update_comment_template(self, template_id: int, name: str = None, content: str = None, is_active: bool = None) -> bool:
+        """更新好评模板"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                # 获取模板所属的cookie_id
+                self._execute_sql(cursor, "SELECT cookie_id FROM comment_templates WHERE id = ?", (template_id,))
+                result = cursor.fetchone()
+                if not result:
+                    logger.warning(f"好评模板不存在: id={template_id}")
+                    return False
+                cookie_id = result[0]
+                
+                # 如果设置为激活状态，先将其他模板设为非激活
+                if is_active:
+                    self._execute_sql(cursor, "UPDATE comment_templates SET is_active = 0 WHERE cookie_id = ?", (cookie_id,))
+                
+                # 构建动态更新语句
+                update_fields = []
+                params = []
+                
+                if name is not None:
+                    update_fields.append("name = ?")
+                    params.append(name)
+                
+                if content is not None:
+                    update_fields.append("content = ?")
+                    params.append(content)
+                
+                if is_active is not None:
+                    update_fields.append("is_active = ?")
+                    params.append(int(is_active))
+                
+                if not update_fields:
+                    return True
+                
+                update_fields.append("updated_at = CURRENT_TIMESTAMP")
+                params.append(template_id)
+                
+                sql = f"UPDATE comment_templates SET {', '.join(update_fields)} WHERE id = ?"
+                self._execute_sql(cursor, sql, tuple(params))
+                self.conn.commit()
+                logger.info(f"更新好评模板成功: id={template_id}")
+                return True
+            except Exception as e:
+                logger.error(f"更新好评模板失败: {e}")
+                self.conn.rollback()
+                return False
+
+    def delete_comment_template(self, template_id: int) -> bool:
+        """删除好评模板"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                self._execute_sql(cursor, "DELETE FROM comment_templates WHERE id = ?", (template_id,))
+                self.conn.commit()
+                logger.info(f"删除好评模板成功: id={template_id}")
+                return True
+            except Exception as e:
+                logger.error(f"删除好评模板失败: {e}")
+                self.conn.rollback()
+                return False
+
+    def set_active_comment_template(self, cookie_id: str, template_id: int) -> bool:
+        """设置激活的好评模板"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                # 先将所有模板设为非激活
+                self._execute_sql(cursor, "UPDATE comment_templates SET is_active = 0 WHERE cookie_id = ?", (cookie_id,))
+                # 设置指定模板为激活
+                self._execute_sql(cursor, "UPDATE comment_templates SET is_active = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND cookie_id = ?", (template_id, cookie_id))
+                self.conn.commit()
+                logger.info(f"设置激活好评模板: cookie_id={cookie_id}, template_id={template_id}")
+                return True
+            except Exception as e:
+                logger.error(f"设置激活好评模板失败: {e}")
+                self.conn.rollback()
+                return False
     
     # -------------------- 关键字操作 --------------------
     def save_keywords(self, cookie_id: str, keywords: List[Tuple[str, str]]) -> bool:
@@ -4471,8 +4874,22 @@ class DBManager:
 
     def insert_or_update_order(self, order_id: str, item_id: str = None, buyer_id: str = None,
                               spec_name: str = None, spec_value: str = None, quantity: str = None,
-                              amount: str = None, order_status: str = None, cookie_id: str = None):
-        """插入或更新订单信息"""
+                              amount: str = None, order_status: str = None, cookie_id: str = None,
+                              sid: str = None):
+        """插入或更新订单信息
+        
+        Args:
+            order_id: 订单ID
+            item_id: 商品ID
+            buyer_id: 买家ID
+            spec_name: 规格名称
+            spec_value: 规格值
+            quantity: 数量
+            amount: 金额
+            order_status: 订单状态
+            cookie_id: Cookie ID
+            sid: 会话ID（如 56226853668@goofish 或 56226853668），用于简化消息匹配订单
+        """
         with self.lock:
             try:
                 cursor = self.conn.cursor()
@@ -4500,6 +4917,9 @@ class DBManager:
                     if buyer_id is not None:
                         update_fields.append("buyer_id = ?")
                         update_values.append(buyer_id)
+                    if sid is not None:
+                        update_fields.append("sid = ?")
+                        update_values.append(sid)
                     if spec_name is not None:
                         update_fields.append("spec_name = ?")
                         update_values.append(spec_name)
@@ -4529,10 +4949,10 @@ class DBManager:
                 else:
                     # 插入新订单
                     cursor.execute('''
-                    INSERT INTO orders (order_id, item_id, buyer_id, spec_name, spec_value,
+                    INSERT INTO orders (order_id, item_id, buyer_id, sid, spec_name, spec_value,
                                       quantity, amount, order_status, cookie_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (order_id, item_id, buyer_id, spec_name, spec_value,
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (order_id, item_id, buyer_id, sid, spec_name, spec_value,
                           quantity, amount, order_status or 'unknown', cookie_id))
                     logger.info(f"插入新订单: {order_id}")
 
@@ -4550,7 +4970,7 @@ class DBManager:
             try:
                 cursor = self.conn.cursor()
                 cursor.execute('''
-                SELECT order_id, item_id, buyer_id, spec_name, spec_value,
+                SELECT order_id, item_id, buyer_id, sid, spec_name, spec_value,
                        quantity, amount, order_status, cookie_id, created_at, updated_at
                 FROM orders WHERE order_id = ?
                 ''', (order_id,))
@@ -4561,14 +4981,15 @@ class DBManager:
                         'order_id': row[0],
                         'item_id': row[1],
                         'buyer_id': row[2],
-                        'spec_name': row[3],
-                        'spec_value': row[4],
-                        'quantity': row[5],
-                        'amount': row[6],
-                        'order_status': row[7],
-                        'cookie_id': row[8],
-                        'created_at': row[9],
-                        'updated_at': row[10]
+                        'sid': row[3],
+                        'spec_name': row[4],
+                        'spec_value': row[5],
+                        'quantity': row[6],
+                        'amount': row[7],
+                        'order_status': row[8],
+                        'cookie_id': row[9],
+                        'created_at': row[10],
+                        'updated_at': row[11]
                     }
                 return None
 
@@ -4582,7 +5003,7 @@ class DBManager:
             try:
                 cursor = self.conn.cursor()
                 cursor.execute('''
-                SELECT order_id, item_id, buyer_id, spec_name, spec_value,
+                SELECT order_id, item_id, buyer_id, sid, spec_name, spec_value,
                        quantity, amount, order_status, created_at, updated_at
                 FROM orders WHERE cookie_id = ?
                 ORDER BY created_at DESC LIMIT ?
@@ -4594,13 +5015,14 @@ class DBManager:
                         'order_id': row[0],
                         'item_id': row[1],
                         'buyer_id': row[2],
-                        'spec_name': row[3],
-                        'spec_value': row[4],
-                        'quantity': row[5],
-                        'amount': row[6],
-                        'order_status': row[7],
-                        'created_at': row[8],
-                        'updated_at': row[9]
+                        'sid': row[3],
+                        'spec_name': row[4],
+                        'spec_value': row[5],
+                        'quantity': row[6],
+                        'amount': row[7],
+                        'order_status': row[8],
+                        'created_at': row[9],
+                        'updated_at': row[10]
                     })
 
                 return orders
@@ -4608,6 +5030,149 @@ class DBManager:
             except Exception as e:
                 logger.error(f"获取Cookie订单列表失败: {cookie_id} - {e}")
                 return []
+
+    def get_recent_order_by_buyer_id(self, buyer_id: str, cookie_id: str = None, status: str = None, minutes: int = 10):
+        """根据买家ID获取最近的订单信息
+        
+        Args:
+            buyer_id: 买家用户ID
+            cookie_id: Cookie ID（可选，用于限定账号）
+            status: 订单状态过滤（可选，如'processing'）
+            minutes: 查询最近多少分钟内的订单，默认10分钟
+        
+        Returns:
+            Dict: 订单信息，包含order_id, item_id等
+        """
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                # 构建查询条件
+                conditions = ["buyer_id = ?"]
+                params = [buyer_id]
+                
+                if cookie_id:
+                    conditions.append("cookie_id = ?")
+                    params.append(cookie_id)
+                
+                if status:
+                    conditions.append("order_status = ?")
+                    params.append(status)
+                
+                # 添加时间限制
+                conditions.append("datetime(created_at) >= datetime('now', ?)")
+                params.append(f'-{minutes} minutes')
+                
+                where_clause = " AND ".join(conditions)
+                
+                cursor.execute(f'''
+                SELECT order_id, item_id, buyer_id, sid, spec_name, spec_value,
+                       quantity, amount, order_status, cookie_id, created_at, updated_at
+                FROM orders 
+                WHERE {where_clause}
+                ORDER BY created_at DESC 
+                LIMIT 1
+                ''', params)
+                
+                row = cursor.fetchone()
+                if row:
+                    logger.info(f"根据买家ID找到最近订单: buyer_id={buyer_id}, order_id={row[0]}, item_id={row[1]}")
+                    return {
+                        'order_id': row[0],
+                        'item_id': row[1],
+                        'buyer_id': row[2],
+                        'sid': row[3],
+                        'spec_name': row[4],
+                        'spec_value': row[5],
+                        'quantity': row[6],
+                        'amount': row[7],
+                        'order_status': row[8],
+                        'cookie_id': row[9],
+                        'created_at': row[10],
+                        'updated_at': row[11]
+                    }
+                
+                logger.warning(f"未找到买家 {buyer_id} 的最近订单 (cookie_id={cookie_id}, status={status}, minutes={minutes})")
+                return None
+                
+            except Exception as e:
+                logger.error(f"根据买家ID获取订单失败: buyer_id={buyer_id} - {e}")
+                return None
+
+    def get_recent_order_by_sid(self, sid: str, cookie_id: str = None, status: str = None, minutes: int = 10):
+        """根据会话ID(sid)获取最近的订单信息
+        
+        用于简化消息场景：当ws消息只包含sid（如56226853668@goofish）而无法获取buyer_id时，
+        通过sid查找对应的订单。
+        
+        Args:
+            sid: 会话ID（如 56226853668@goofish 或 56226853668）
+            cookie_id: Cookie ID（可选，用于限定账号）
+            status: 订单状态过滤（可选，如'processing'）
+            minutes: 查询最近多少分钟内的订单，默认10分钟
+        
+        Returns:
+            Dict: 订单信息，包含order_id, item_id, sid等
+        """
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                # 处理sid格式：可能是 "56226853668@goofish" 或 "56226853668"
+                # 数据库中存储的可能是完整格式或纯数字格式，需要同时匹配
+                sid_clean = sid.split('@')[0] if '@' in sid else sid
+                
+                # 构建查询条件：同时匹配完整sid和纯数字sid
+                conditions = ["(sid = ? OR sid = ? OR sid LIKE ?)"]
+                params = [sid, sid_clean, f"{sid_clean}@%"]
+                
+                if cookie_id:
+                    conditions.append("cookie_id = ?")
+                    params.append(cookie_id)
+                
+                if status:
+                    conditions.append("order_status = ?")
+                    params.append(status)
+                
+                # 添加时间限制
+                conditions.append("datetime(created_at) >= datetime('now', ?)")
+                params.append(f'-{minutes} minutes')
+                
+                where_clause = " AND ".join(conditions)
+                
+                cursor.execute(f'''
+                SELECT order_id, item_id, buyer_id, sid, spec_name, spec_value,
+                       quantity, amount, order_status, cookie_id, created_at, updated_at
+                FROM orders 
+                WHERE {where_clause}
+                ORDER BY created_at DESC 
+                LIMIT 1
+                ''', params)
+                
+                row = cursor.fetchone()
+                if row:
+                    logger.info(f"根据sid找到最近订单: sid={sid}, order_id={row[0]}, item_id={row[1]}")
+                    return {
+                        'order_id': row[0],
+                        'item_id': row[1],
+                        'buyer_id': row[2],
+                        'sid': row[3],
+                        'spec_name': row[4],
+                        'spec_value': row[5],
+                        'quantity': row[6],
+                        'amount': row[7],
+                        'order_status': row[8],
+                        'cookie_id': row[9],
+                        'created_at': row[10],
+                        'updated_at': row[11]
+                    }
+                
+                logger.warning(f"未找到sid {sid} 的最近订单 (cookie_id={cookie_id}, status={status}, minutes={minutes})")
+                return None
+                
+            except Exception as e:
+                logger.error(f"根据sid获取订单失败: sid={sid} - {e}")
+                return None
 
     def update_order_yifan_status(self, order_id: str, yifan_orderno: str = None,
                                   delivery_status: str = None, callback_data: str = None):

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -1001,7 +1001,7 @@ async def send_message_api(request: SendMessageRequest):
                 )
 
         # 直接获取XianyuLive实例，跳过cookie_manager检查
-        from XianyuAutoAsync import XianyuLive
+        from XianyuAutoAsync import XianyuLive, ConnectionState
         live_instance = XianyuLive.get_instance(cleaned_cookie_id)
 
         if not live_instance:
@@ -1011,12 +1011,21 @@ async def send_message_api(request: SendMessageRequest):
                 message="账号实例不存在或未连接，请检查账号状态"
             )
 
-        # 检查WebSocket连接状态
-        if not live_instance.ws or live_instance.ws.closed:
-            logger.warning(f"账号WebSocket连接已断开: {cleaned_cookie_id}")
+        # 检查WebSocket连接状态（使用connection_state作为主要判断依据）
+        # connection_state 是项目维护的连接状态，比 ws.closed 更可靠
+        if live_instance.connection_state != ConnectionState.CONNECTED:
+            logger.warning(f"账号WebSocket连接状态异常: {cleaned_cookie_id}, 状态: {live_instance.connection_state}")
             return SendMessageResponse(
                 success=False,
-                message="账号WebSocket连接已断开，请等待重连"
+                message=f"账号WebSocket连接状态异常({live_instance.connection_state.value})，请等待重连"
+            )
+        
+        # 额外检查ws对象是否存在
+        if not live_instance.ws:
+            logger.warning(f"账号WebSocket对象不存在: {cleaned_cookie_id}")
+            return SendMessageResponse(
+                success=False,
+                message="账号WebSocket连接未就绪，请等待重连"
             )
 
         # 发送消息（使用清理后的所有参数）
@@ -1165,6 +1174,7 @@ def get_cookies_details(current_user: Dict[str, Any] = Depends(get_current_user)
     for cookie_id, cookie_value in user_cookies.items():
         cookie_enabled = cookie_manager.manager.get_cookie_status(cookie_id)
         auto_confirm = db_manager.get_auto_confirm(cookie_id)
+        auto_comment = db_manager.get_auto_comment(cookie_id)
         # 获取备注信息
         cookie_details = db_manager.get_cookie_details(cookie_id)
         remark = cookie_details.get('remark', '') if cookie_details else ''
@@ -1174,6 +1184,7 @@ def get_cookies_details(current_user: Dict[str, Any] = Depends(get_current_user)
             'value': cookie_value,
             'enabled': cookie_enabled,
             'auto_confirm': auto_confirm,
+            'auto_comment': auto_comment,
             'remark': remark,
             'pause_duration': cookie_details.get('pause_duration', 10) if cookie_details else 10
         })
@@ -1327,6 +1338,99 @@ def get_cookie_account_details(cid: str, current_user: Dict[str, Any] = Depends(
         raise
     except Exception as e:
         logger.error(f"获取账号详情失败: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ========================= 代理配置相关接口 =========================
+
+class ProxyConfig(BaseModel):
+    """代理配置模型"""
+    proxy_type: Optional[str] = 'none'  # none/http/https/socks5
+    proxy_host: Optional[str] = ''
+    proxy_port: Optional[int] = 0
+    proxy_user: Optional[str] = ''
+    proxy_pass: Optional[str] = ''
+
+
+@app.get("/cookie/{cid}/proxy")
+def get_cookie_proxy_config(cid: str, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """获取账号的代理配置"""
+    try:
+        # 检查cookie是否属于当前用户
+        user_id = current_user['user_id']
+        from db_manager import db_manager
+        user_cookies = db_manager.get_all_cookies(user_id)
+
+        if cid not in user_cookies:
+            raise HTTPException(status_code=403, detail="无权限操作该Cookie")
+
+        # 获取代理配置
+        proxy_config = db_manager.get_cookie_proxy_config(cid)
+        
+        return {
+            'success': True,
+            'data': proxy_config
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取代理配置失败: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/cookie/{cid}/proxy")
+def update_cookie_proxy_config(cid: str, config: ProxyConfig, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """更新账号的代理配置"""
+    if cookie_manager.manager is None:
+        raise HTTPException(status_code=500, detail='CookieManager 未就绪')
+    try:
+        # 检查cookie是否属于当前用户
+        user_id = current_user['user_id']
+        from db_manager import db_manager
+        user_cookies = db_manager.get_all_cookies(user_id)
+
+        if cid not in user_cookies:
+            raise HTTPException(status_code=403, detail="无权限操作该Cookie")
+
+        # 验证代理类型
+        valid_proxy_types = ['none', 'http', 'https', 'socks5']
+        if config.proxy_type not in valid_proxy_types:
+            raise HTTPException(status_code=400, detail=f"无效的代理类型，支持的类型: {', '.join(valid_proxy_types)}")
+
+        # 如果设置了代理类型（非none），验证必要字段
+        if config.proxy_type != 'none':
+            if not config.proxy_host:
+                raise HTTPException(status_code=400, detail="代理地址不能为空")
+            if not config.proxy_port or config.proxy_port <= 0:
+                raise HTTPException(status_code=400, detail="代理端口无效")
+
+        # 更新数据库
+        success = db_manager.update_cookie_proxy_config(
+            cid,
+            proxy_type=config.proxy_type,
+            proxy_host=config.proxy_host,
+            proxy_port=config.proxy_port,
+            proxy_user=config.proxy_user,
+            proxy_pass=config.proxy_pass
+        )
+        
+        if not success:
+            raise HTTPException(status_code=400, detail="更新代理配置失败")
+        
+        # 重启账号任务以应用新的代理配置
+        logger.info(f"代理配置已更新，重启账号任务: {cid}")
+        cookie_value = user_cookies.get(cid)
+        if cookie_value:
+            cookie_manager.manager.update_cookie(cid, cookie_value, save_to_db=False)
+        
+        return {
+            'success': True,
+            'msg': '代理配置已更新，账号任务已重启'
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新代理配置失败: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -2818,6 +2922,22 @@ class AutoConfirmUpdate(BaseModel):
     auto_confirm: bool
 
 
+class AutoCommentUpdate(BaseModel):
+    auto_comment: bool
+
+
+class CommentTemplateCreate(BaseModel):
+    name: str
+    content: str
+    is_active: Optional[bool] = False
+
+
+class CommentTemplateUpdate(BaseModel):
+    name: Optional[str] = None
+    content: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
 class RemarkUpdate(BaseModel):
     remark: str
 
@@ -2879,6 +2999,212 @@ def get_auto_confirm(cid: str, current_user: Dict[str, Any] = Depends(get_curren
         return {
             "auto_confirm": auto_confirm,
             "message": f"自动确认发货当前{'开启' if auto_confirm else '关闭'}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== 自动好评相关API ====================
+
+@app.put("/cookies/{cid}/auto-comment")
+def update_auto_comment(cid: str, update_data: AutoCommentUpdate, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """更新账号的自动好评设置"""
+    if cookie_manager.manager is None:
+        raise HTTPException(status_code=500, detail="CookieManager 未就绪")
+    try:
+        # 检查cookie是否属于当前用户
+        user_id = current_user['user_id']
+        from db_manager import db_manager
+        user_cookies = db_manager.get_all_cookies(user_id)
+
+        if cid not in user_cookies:
+            raise HTTPException(status_code=403, detail="无权限操作该Cookie")
+
+        # 更新数据库中的auto_comment设置
+        success = db_manager.update_auto_comment(cid, update_data.auto_comment)
+        if not success:
+            raise HTTPException(status_code=500, detail="更新自动好评设置失败")
+
+        return {
+            "msg": "success",
+            "auto_comment": update_data.auto_comment,
+            "message": f"自动好评已{'开启' if update_data.auto_comment else '关闭'}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/cookies/{cid}/auto-comment")
+def get_auto_comment(cid: str, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """获取账号的自动好评设置"""
+    if cookie_manager.manager is None:
+        raise HTTPException(status_code=500, detail="CookieManager 未就绪")
+    try:
+        # 检查cookie是否属于当前用户
+        user_id = current_user['user_id']
+        from db_manager import db_manager
+        user_cookies = db_manager.get_all_cookies(user_id)
+
+        if cid not in user_cookies:
+            raise HTTPException(status_code=403, detail="无权限操作该Cookie")
+
+        # 获取auto_comment设置
+        auto_comment = db_manager.get_auto_comment(cid)
+        return {
+            "auto_comment": auto_comment,
+            "message": f"自动好评当前{'开启' if auto_comment else '关闭'}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/cookies/{cid}/comment-templates")
+def get_comment_templates(cid: str, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """获取账号的好评模板列表"""
+    if cookie_manager.manager is None:
+        raise HTTPException(status_code=500, detail="CookieManager 未就绪")
+    try:
+        # 检查cookie是否属于当前用户
+        user_id = current_user['user_id']
+        from db_manager import db_manager
+        user_cookies = db_manager.get_all_cookies(user_id)
+
+        if cid not in user_cookies:
+            raise HTTPException(status_code=403, detail="无权限操作该Cookie")
+
+        templates = db_manager.get_comment_templates(cid)
+        return {
+            "templates": templates,
+            "message": "获取好评模板列表成功"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/cookies/{cid}/comment-templates")
+def add_comment_template(cid: str, template_data: CommentTemplateCreate, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """添加好评模板"""
+    if cookie_manager.manager is None:
+        raise HTTPException(status_code=500, detail="CookieManager 未就绪")
+    try:
+        # 检查cookie是否属于当前用户
+        user_id = current_user['user_id']
+        from db_manager import db_manager
+        user_cookies = db_manager.get_all_cookies(user_id)
+
+        if cid not in user_cookies:
+            raise HTTPException(status_code=403, detail="无权限操作该Cookie")
+
+        template_id = db_manager.add_comment_template(
+            cid, 
+            template_data.name, 
+            template_data.content, 
+            template_data.is_active
+        )
+        if template_id is None:
+            raise HTTPException(status_code=500, detail="添加好评模板失败")
+
+        return {
+            "msg": "success",
+            "template_id": template_id,
+            "message": "添加好评模板成功"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/cookies/{cid}/comment-templates/{template_id}")
+def update_comment_template(cid: str, template_id: int, template_data: CommentTemplateUpdate, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """更新好评模板"""
+    if cookie_manager.manager is None:
+        raise HTTPException(status_code=500, detail="CookieManager 未就绪")
+    try:
+        # 检查cookie是否属于当前用户
+        user_id = current_user['user_id']
+        from db_manager import db_manager
+        user_cookies = db_manager.get_all_cookies(user_id)
+
+        if cid not in user_cookies:
+            raise HTTPException(status_code=403, detail="无权限操作该Cookie")
+
+        success = db_manager.update_comment_template(
+            template_id,
+            name=template_data.name,
+            content=template_data.content,
+            is_active=template_data.is_active
+        )
+        if not success:
+            raise HTTPException(status_code=500, detail="更新好评模板失败")
+
+        return {
+            "msg": "success",
+            "message": "更新好评模板成功"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/cookies/{cid}/comment-templates/{template_id}")
+def delete_comment_template(cid: str, template_id: int, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """删除好评模板"""
+    if cookie_manager.manager is None:
+        raise HTTPException(status_code=500, detail="CookieManager 未就绪")
+    try:
+        # 检查cookie是否属于当前用户
+        user_id = current_user['user_id']
+        from db_manager import db_manager
+        user_cookies = db_manager.get_all_cookies(user_id)
+
+        if cid not in user_cookies:
+            raise HTTPException(status_code=403, detail="无权限操作该Cookie")
+
+        success = db_manager.delete_comment_template(template_id)
+        if not success:
+            raise HTTPException(status_code=500, detail="删除好评模板失败")
+
+        return {
+            "msg": "success",
+            "message": "删除好评模板成功"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/cookies/{cid}/comment-templates/{template_id}/activate")
+def activate_comment_template(cid: str, template_id: int, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """激活指定的好评模板"""
+    if cookie_manager.manager is None:
+        raise HTTPException(status_code=500, detail="CookieManager 未就绪")
+    try:
+        # 检查cookie是否属于当前用户
+        user_id = current_user['user_id']
+        from db_manager import db_manager
+        user_cookies = db_manager.get_all_cookies(user_id)
+
+        if cid not in user_cookies:
+            raise HTTPException(status_code=403, detail="无权限操作该Cookie")
+
+        success = db_manager.set_active_comment_template(cid, template_id)
+        if not success:
+            raise HTTPException(status_code=500, detail="激活好评模板失败")
+
+        return {
+            "msg": "success",
+            "message": "激活好评模板成功"
         }
     except HTTPException:
         raise
@@ -3479,6 +3805,86 @@ async def add_image_keyword(
     except Exception as e:
         logger.error(f"添加图片关键词失败: {e}")
         raise HTTPException(status_code=500, detail=f"添加图片关键词失败: {str(e)}")
+
+
+@app.post("/keywords/{cid}/image-batch")
+async def add_image_keyword_batch(
+    cid: str,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """批量添加图片关键词（使用已上传的图片URL）"""
+    if cookie_manager.manager is None:
+        raise HTTPException(status_code=500, detail="CookieManager 未就绪")
+
+    # 检查cookie是否属于当前用户
+    cookie_details = db_manager.get_cookie_details(cid)
+    if not cookie_details or cookie_details['user_id'] != current_user['user_id']:
+        raise HTTPException(status_code=404, detail="账号不存在或无权限")
+
+    try:
+        body = await request.json()
+        image_url = body.get('image_url', '').strip()
+        keywords = body.get('keywords', [])
+        item_ids = body.get('item_ids', [])
+
+        if not image_url:
+            raise HTTPException(status_code=400, detail="图片URL不能为空")
+
+        if not keywords or len(keywords) == 0:
+            raise HTTPException(status_code=400, detail="关键词列表不能为空")
+
+        # 如果没有商品ID，则使用空字符串（通用关键词）
+        if not item_ids or len(item_ids) == 0:
+            item_ids = ['']
+
+        logger.info(f"批量添加图片关键词: cid={cid}, keywords={keywords}, item_ids={item_ids}, image_url={image_url}")
+
+        # 检查重复并批量添加
+        success_count = 0
+        fail_count = 0
+        duplicates = []
+
+        for keyword in keywords:
+            keyword = keyword.strip()
+            if not keyword:
+                continue
+
+            for item_id in item_ids:
+                normalized_item_id = item_id if item_id and item_id.strip() else None
+
+                # 检查是否重复
+                if db_manager.check_keyword_duplicate(cid, keyword, normalized_item_id):
+                    item_id_text = f"（商品ID: {normalized_item_id}）" if normalized_item_id else "（通用关键词）"
+                    duplicates.append(f'"{keyword}" {item_id_text}')
+                    fail_count += 1
+                    continue
+
+                # 保存图片关键词
+                success = db_manager.save_image_keyword(cid, keyword, image_url, normalized_item_id)
+                if success:
+                    success_count += 1
+                else:
+                    fail_count += 1
+
+        if duplicates:
+            log_with_user('warning', f"批量添加图片关键词有重复: {cid}, duplicates={duplicates}", current_user)
+
+        log_with_user('info', f"批量添加图片关键词完成: {cid}, success={success_count}, fail={fail_count}", current_user)
+
+        return {
+            "msg": "批量添加完成",
+            "success_count": success_count,
+            "fail_count": fail_count,
+            "duplicates": duplicates,
+            "image_url": image_url
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"批量添加图片关键词失败: {e}")
+        raise HTTPException(status_code=500, detail=f"批量添加图片关键词失败: {str(e)}")
 
 
 @app.post("/upload-image")
@@ -5552,6 +5958,398 @@ def get_user_orders(current_user: Dict[str, Any] = Depends(get_current_user)):
     except Exception as e:
         log_with_user('error', f"查询用户订单失败: {str(e)}", current_user)
         raise HTTPException(status_code=500, detail=f"查询订单失败: {str(e)}")
+
+
+# ==================== 自动更新接口 ====================
+
+from auto_updater import get_updater, UpdateStatus, init_updater
+from pydantic import BaseModel as PydanticBaseModel
+
+class UpdateCheckResponse(PydanticBaseModel):
+    """更新检查响应"""
+    has_update: bool
+    current_version: str
+    new_version: str = ""
+    description: str = ""
+    changelog: list = []
+    files_count: int = 0
+    total_size: int = 0
+    release_date: str = ""
+
+
+class UpdateProgressResponse(PydanticBaseModel):
+    """更新进度响应"""
+    status: str
+    current_file: str = ""
+    current_index: int = 0
+    total_files: int = 0
+    downloaded_bytes: int = 0
+    total_bytes: int = 0
+    message: str = ""
+    error: str = ""
+
+
+class UpdateResultResponse(PydanticBaseModel):
+    """更新结果响应"""
+    success: bool
+    message: str
+    updated_files: list = []
+    needs_restart: bool = False
+    new_version: str = ""
+
+
+@app.get('/api/update/check')
+async def check_for_updates(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    检查是否有可用更新
+    
+    返回更新信息，包括新版本号、更新内容等
+    """
+    try:
+        updater = get_updater()
+        manifest = await updater.check_for_updates()
+        
+        if manifest is None:
+            return {
+                "success": True,
+                "data": {
+                    "has_update": False,
+                    "current_version": updater.current_version,
+                    "message": "已是最新版本"
+                }
+            }
+        
+        # 获取需要更新的文件
+        files_to_update = await updater.get_files_to_update(manifest)
+        total_size = sum(f.size for f in files_to_update)
+        
+        return {
+            "success": True,
+            "data": {
+                "has_update": True,
+                "current_version": updater.current_version,
+                "new_version": manifest.version,
+                "description": manifest.description,
+                "changelog": manifest.changelog or [],
+                "files_count": len(files_to_update),
+                "total_size": total_size,
+                "release_date": manifest.release_date,
+                "files": [
+                    {
+                        "path": f.path,
+                        "size": f.size,
+                        "requires_restart": f.requires_restart,
+                        "description": f.description
+                    }
+                    for f in files_to_update
+                ]
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"检查更新失败: {e}")
+        return {
+            "success": False,
+            "message": f"检查更新失败: {str(e)}"
+        }
+
+
+@app.post('/api/update/apply')
+async def apply_updates(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    应用更新
+    
+    下载并安装所有可用更新
+    """
+    try:
+        # 只允许管理员执行更新（检查username是否为admin）
+        if current_user.get('username') != 'admin':
+            raise HTTPException(status_code=403, detail="只有管理员可以执行更新")
+        
+        updater = get_updater()
+        
+        log_with_user('info', "开始执行自动更新", current_user)
+        
+        result = await updater.perform_update()
+        
+        if result["success"]:
+            log_with_user('info', f"更新完成: {result['message']}", current_user)
+        else:
+            log_with_user('error', f"更新失败: {result['message']}", current_user)
+        
+        return {
+            "success": result["success"],
+            "data": result
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"应用更新失败: {e}")
+        return {
+            "success": False,
+            "message": f"应用更新失败: {str(e)}"
+        }
+
+
+@app.get('/api/update/progress')
+async def get_update_progress(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    获取更新进度
+    
+    返回当前更新状态和进度信息
+    """
+    try:
+        updater = get_updater()
+        progress = updater.progress
+        
+        return {
+            "success": True,
+            "data": {
+                "status": progress.status.value,
+                "current_file": progress.current_file,
+                "current_index": progress.current_index,
+                "total_files": progress.total_files,
+                "downloaded_bytes": progress.downloaded_bytes,
+                "total_bytes": progress.total_bytes,
+                "message": progress.message,
+                "error": progress.error
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"获取更新进度失败: {e}")
+        return {
+            "success": False,
+            "message": f"获取更新进度失败: {str(e)}"
+        }
+
+
+@app.get('/api/update/local-hashes')
+async def get_local_file_hashes(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    获取本地文件哈希值
+    
+    用于服务端比对哪些文件需要更新
+    """
+    try:
+        # 只允许管理员查看（检查username是否为admin）
+        if current_user.get('username') != 'admin':
+            raise HTTPException(status_code=403, detail="只有管理员可以查看文件哈希")
+        
+        updater = get_updater()
+        hashes = updater.get_local_file_hashes()
+        
+        return {
+            "success": True,
+            "data": {
+                "version": updater.current_version,
+                "files": hashes,
+                "count": len(hashes)
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取文件哈希失败: {e}")
+        return {
+            "success": False,
+            "message": f"获取文件哈希失败: {str(e)}"
+        }
+
+
+@app.post('/api/update/cleanup-backups')
+async def cleanup_old_backups(days: int = 7, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    清理旧的备份文件
+    
+    Args:
+        days: 保留天数，默认7天
+    """
+    try:
+        # 只允许管理员执行（检查username是否为admin）
+        if current_user.get('username') != 'admin':
+            raise HTTPException(status_code=403, detail="只有管理员可以清理备份")
+        
+        updater = get_updater()
+        updater.cleanup_old_backups(keep_days=days)
+        
+        log_with_user('info', f"清理了 {days} 天前的备份文件", current_user)
+        
+        return {
+            "success": True,
+            "message": f"已清理 {days} 天前的备份文件"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"清理备份失败: {e}")
+        return {
+            "success": False,
+            "message": f"清理备份失败: {str(e)}"
+        }
+
+
+@app.get('/api/update/file-changes')
+async def get_file_changes(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    比较当前文件与上次更新后的哈希清单
+    
+    用于检测哪些文件在更新后被本地修改过
+    """
+    try:
+        # 只允许管理员查看
+        if current_user.get('username') != 'admin':
+            raise HTTPException(status_code=403, detail="只有管理员可以查看文件变化")
+        
+        updater = get_updater()
+        result = updater.compare_file_hashes()
+        
+        return {
+            "success": True,
+            "data": result
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"比较文件变化失败: {e}")
+        return {
+            "success": False,
+            "message": f"比较文件变化失败: {str(e)}"
+        }
+
+
+@app.post('/api/update/save-hashes')
+async def save_current_hashes(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    手动保存当前文件的哈希清单
+    
+    用于记录当前状态，以便以后比较
+    """
+    try:
+        # 只允许管理员执行
+        if current_user.get('username') != 'admin':
+            raise HTTPException(status_code=403, detail="只有管理员可以保存哈希清单")
+        
+        updater = get_updater()
+        updater.save_file_hashes(updater.current_version)
+        
+        log_with_user('info', "手动保存文件哈希清单", current_user)
+        
+        return {
+            "success": True,
+            "message": "文件哈希清单已保存"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"保存哈希清单失败: {e}")
+        return {
+            "success": False,
+            "message": f"保存哈希清单失败: {str(e)}"
+        }
+
+
+@app.get('/api/update/saved-hashes')
+async def get_saved_hashes(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    获取上次保存的文件哈希清单
+    """
+    try:
+        # 只允许管理员查看
+        if current_user.get('username') != 'admin':
+            raise HTTPException(status_code=403, detail="只有管理员可以查看哈希清单")
+        
+        updater = get_updater()
+        saved_hashes = updater.load_file_hashes()
+        
+        if saved_hashes is None:
+            return {
+                "success": True,
+                "data": None,
+                "message": "没有保存的哈希清单"
+            }
+        
+        return {
+            "success": True,
+            "data": {
+                "version": saved_hashes.get("version"),
+                "updated_at": saved_hashes.get("updated_at"),
+                "total_files": saved_hashes.get("total_files"),
+                "last_updated_files": saved_hashes.get("last_updated_files", []),
+                "last_updated_count": saved_hashes.get("last_updated_count", 0)
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取哈希清单失败: {e}")
+        return {
+            "success": False,
+            "message": f"获取哈希清单失败: {str(e)}"
+        }
+
+
+@app.post('/api/update/restart')
+async def restart_application(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    重启应用（用于更新后重启）
+    
+    注意：此操作会重启整个应用
+    """
+    try:
+        # 只允许管理员执行（检查username是否为admin）
+        if current_user.get('username') != 'admin':
+            raise HTTPException(status_code=403, detail="只有管理员可以重启应用")
+        
+        log_with_user('info', "用户请求重启应用", current_user)
+        
+        import subprocess
+        import sys
+        
+        # 返回响应后异步重启
+        async def delayed_restart():
+            await asyncio.sleep(2)  # 等待2秒让响应返回
+            logger.info("正在重启应用...")
+            
+            # 获取当前Python解释器和脚本路径
+            python = sys.executable
+            script = sys.argv[0]
+            
+            # 在Windows上使用start命令启动新进程
+            if sys.platform == 'win32':
+                subprocess.Popen(
+                    [python, script],
+                    creationflags=subprocess.CREATE_NEW_CONSOLE
+                )
+            else:
+                # Linux/Mac
+                subprocess.Popen([python, script])
+            
+            # 退出当前进程
+            os._exit(0)
+        
+        # 创建后台任务
+        asyncio.create_task(delayed_restart())
+        
+        return {
+            "success": True,
+            "message": "应用将在2秒后重启"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"重启应用失败: {e}")
+        return {
+            "success": False,
+            "message": f"重启应用失败: {str(e)}"
+        }
 
 
 # 移除自动启动，由Start.py或手动启动
