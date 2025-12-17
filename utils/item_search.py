@@ -9,17 +9,9 @@ import json
 import time
 import sys
 import os
-import hashlib
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 from loguru import logger
-
-try:
-    import aiohttp
-    AIOHTTP_AVAILABLE = True
-except ImportError:
-    AIOHTTP_AVAILABLE = False
-    logger.warning("aiohttp 未安装，将使用 Playwright 方式")
 
 # 修复Docker环境中的asyncio事件循环策略问题
 if sys.platform.startswith('linux') or os.getenv('DOCKER_ENV'):
@@ -640,301 +632,27 @@ class XianyuSearcher:
         return data
 
     async def get_first_valid_cookie(self):
-        """获取第一个有效的cookie，优先使用最近更新的"""
+        """获取第一个有效的cookie"""
         try:
             from db_manager import db_manager
 
             # 获取所有cookies，返回格式是 {id: value}
             cookies = db_manager.get_all_cookies()
-            
-            if not cookies:
-                return None
 
-            # 尝试获取Cookie详情（包含更新时间）来排序
-            valid_cookies = []
+            # 找到第一个有效的cookie（长度大于50的认为是有效的）
             for cookie_id, cookie_value in cookies.items():
                 if len(cookie_value) > 50:
-                    # 检查是否有有效的token
-                    cookies_dict = self._trans_cookies(cookie_value)
-                    token = cookies_dict.get('_m_h5_tk', '').split('_')[0] if cookies_dict.get('_m_h5_tk') else ''
-                    
-                    if token:
-                        # 获取Cookie详情以获取更新时间
-                        try:
-                            cookie_detail = db_manager.get_cookie_details(cookie_id)
-                            updated_at = cookie_detail.get('updated_at', '') if cookie_detail else ''
-                            created_at = cookie_detail.get('created_at', '') if cookie_detail else ''
-                            valid_cookies.append({
-                                'id': cookie_id,
-                                'value': cookie_value,
-                                'updated_at': updated_at,
-                                'created_at': created_at,
-                                'token': token
-                            })
-                        except:
-                            # 如果获取详情失败，仍然添加
-                            valid_cookies.append({
-                                'id': cookie_id,
-                                'value': cookie_value,
-                                'updated_at': '',
-                                'created_at': '',
-                                'token': token
-                            })
-            
-            if not valid_cookies:
-                return None
-            
-            # 按创建时间或更新时间排序，最新的在前
-            # 优先使用updated_at，如果没有则使用created_at
-            valid_cookies.sort(key=lambda x: (
-                x['updated_at'] if x['updated_at'] else x.get('created_at', ''),  # 先按更新时间或创建时间
-                len(x['token'])  # 再按token长度
-            ), reverse=True)
-            
-            # 打印所有有效Cookie供调试
-            logger.debug(f"找到 {len(valid_cookies)} 个有效Cookie:")
-            for i, c in enumerate(valid_cookies[:3], 1):
-                time_str = c['updated_at'] or c.get('created_at', '') or '未知'
-                logger.debug(f"  {i}. {c['id']} - token: {c['token'][:10]}... - time: {time_str}")
-            
-            # 优先选择有token的Cookie
-            selected = valid_cookies[0]
-            logger.info(f"选择Cookie: {selected['id']} (token: {selected['token'][:10]}...)")
-            
-            return {
-                'id': selected['id'],
-                'value': selected['value']
-            }
+                    logger.info(f"找到有效cookie: {cookie_id}")
+                    return {
+                        'id': cookie_id,
+                        'value': cookie_value
+                    }
+
+            return None
 
         except Exception as e:
             logger.error(f"获取cookie失败: {str(e)}")
-            # 如果出错，回退到原来的简单方法
-            try:
-                from db_manager import db_manager
-                cookies = db_manager.get_all_cookies()
-                for cookie_id, cookie_value in cookies.items():
-                    if len(cookie_value) > 50:
-                        logger.info(f"找到有效cookie (回退方法): {cookie_id}")
-                        return {
-                            'id': cookie_id,
-                            'value': cookie_value
-                        }
-            except:
-                pass
             return None
-
-    def _generate_sign(self, t: str, token: str, data: str) -> str:
-        """生成API签名"""
-        app_key = "34839810"
-        msg = f"{token}&{t}&{app_key}&{data}"
-        md5_hash = hashlib.md5()
-        md5_hash.update(msg.encode('utf-8'))
-        return md5_hash.hexdigest()
-
-    def _trans_cookies(self, cookies_str: str) -> dict:
-        """将cookies字符串转换为字典"""
-        from urllib.parse import unquote
-        cookies = {}
-        for cookie in cookies_str.split("; "):
-            if "=" in cookie:
-                key, value = cookie.split("=", 1)
-                key = key.strip()
-                value = value.strip()
-                # 对值进行URL解码（某些Cookie值可能是URL编码的）
-                try:
-                    value = unquote(value)
-                except:
-                    pass
-                cookies[key] = value
-        return cookies
-
-    async def search_items_via_api(self, keyword: str, page: int = 1, page_size: int = 30) -> Dict[str, Any]:
-        """
-        直接调用搜索API，按最新发布排序
-        
-        Args:
-            keyword: 搜索关键词
-            page: 页码，从1开始
-            page_size: 每页数量，默认30
-            
-        Returns:
-            搜索结果字典
-        """
-        if not AIOHTTP_AVAILABLE:
-            raise Exception("aiohttp 未安装，无法使用API方式")
-        
-        try:
-            # 获取cookie
-            cookie_data = await self.get_first_valid_cookie()
-            if not cookie_data:
-                raise Exception("未找到有效的cookies账户")
-            
-            cookies_dict = self._trans_cookies(cookie_data.get('value', ''))
-            logger.debug(f"解析后的cookies: {list(cookies_dict.keys())}")
-            
-            # 移除可能导致验证失败的字段（这些字段可能是访问首页后添加的，但会导致验证失败）
-            # 测试脚本中成功的Cookie没有这些字段
-            problematic_fields = ['x5secdata', 'x5sectag']
-            for field in problematic_fields:
-                if field in cookies_dict:
-                    logger.debug(f"移除可能导致问题的字段: {field}")
-                    del cookies_dict[field]
-            
-            # 获取token（不访问首页，直接使用原始token，与测试脚本保持一致）
-            token = cookies_dict.get('_m_h5_tk', '').split('_')[0] if cookies_dict.get('_m_h5_tk') else ''
-            if not token:
-                raise Exception("无法从cookies中获取token，请检查cookie是否有效")
-            
-            logger.debug(f"使用的token: {token[:10]}...")
-            logger.debug(f"清理后的Cookie字段数: {len(cookies_dict)}")
-            
-            # 构建请求body，按最新发布排序
-            request_body = {
-                "pageNumber": page,
-                "keyword": keyword,
-                "fromFilter": True,
-                "rowsPerPage": page_size,
-                "sortValue": "desc",  # 降序
-                "sortField": "create",  # 按创建时间排序
-                "customDistance": "",
-                "gps": "",
-                "propValueStr": {
-                    "searchFilter": "quickFilter:filterPersonal;"
-                },
-                "customGps": "",
-                "searchReqFromPage": "pcSearch",
-                "extraFilterValue": "{}",
-                "userPositionJson": "{}"
-            }
-            
-            data_str = json.dumps(request_body, separators=(',', ':'))
-            
-            # 生成时间戳和签名
-            t = str(int(time.time() * 1000))
-            sign = self._generate_sign(t, token, data_str)
-            
-            # 构建请求URL
-            api_url = "https://h5api.m.goofish.com/h5/mtop.taobao.idlemtopsearch.pc.search/1.0/"
-            
-            # 调试：打印完整的请求信息
-            logger.debug(f"完整请求信息:")
-            logger.debug(f"  URL: {api_url}")
-            logger.debug(f"  Token: {token}")
-            logger.debug(f"  时间戳: {t}")
-            logger.debug(f"  签名: {sign}")
-            logger.debug(f"  Body: {data_str}")
-            logger.debug(f"  Cookie数量: {len(cookies_dict)}")
-            params = {
-                'jsv': '2.7.2',
-                'appKey': '34839810',
-                't': t,
-                'sign': sign,
-                'v': '1.0',
-                'type': 'originaljson',
-                'accountSite': 'xianyu',
-                'dataType': 'json',
-                'timeout': '20000',
-                'api': 'mtop.taobao.idlemtopsearch.pc.search',
-                'sessionOption': 'AutoLoginOnly',
-                'spm_cnt': 'a21ybx.search.0.0',
-                'spm_pre': 'a21ybx.home.searchHistory.2.4c053da6kswSk0',
-                'log_id': '4c053da6kswSk0'
-            }
-            
-            # 构建请求头（模拟真实浏览器）
-            headers = {
-                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://www.goofish.com/',
-                'Origin': 'https://www.goofish.com',
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Sec-Fetch-Dest': 'empty',
-                'Sec-Fetch-Mode': 'cors',
-                'Sec-Fetch-Site': 'same-site',
-                'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-                'sec-ch-ua-mobile': '?0',
-                'sec-ch-ua-platform': '"Windows"'
-            }
-            
-            # 检查必要的cookie字段
-            required_cookies = ['_m_h5_tk', '_m_h5_tk_enc']
-            missing_cookies = [c for c in required_cookies if c not in cookies_dict or not cookies_dict[c]]
-            if missing_cookies:
-                logger.warning(f"缺少必要的cookie字段: {missing_cookies}")
-            
-            logger.debug(f"请求参数: page={page}, keyword={keyword}, token={token[:10]}...")
-            logger.debug(f"签名: {sign}")
-            logger.debug(f"请求Body长度: {len(data_str)}")
-            logger.debug(f"请求Body前100字符: {data_str[:100]}")
-            
-            # 发送请求
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    api_url,
-                    params=params,
-                    data={'data': data_str},
-                    headers=headers,
-                    cookies=cookies_dict,
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as response:
-                    if response.status != 200:
-                        raise Exception(f"API请求失败，状态码: {response.status}")
-                    
-                    result_json = await response.json()
-                    
-                    # 检查API响应
-                    ret_code = result_json.get('ret', [])
-                    if ret_code and ret_code[0] != 'SUCCESS::调用成功':
-                        error_msg = ret_code[0] if isinstance(ret_code, list) else str(ret_code)
-                        
-                        # 如果是用户验证失败，提供更详细的错误信息
-                        if 'FAIL_SYS_USER_VALIDATE' in error_msg:
-                            logger.error(f"用户验证失败，可能的原因：")
-                            logger.error(f"  1. Cookie中的_m_h5_tk已过期，请更新Cookie")
-                            logger.error(f"  2. Cookie不完整，缺少必要的字段")
-                            logger.error(f"  3. 账户状态异常，请检查账户是否正常")
-                            logger.error(f"当前token: {token[:20]}...")
-                            logger.error(f"Cookie字段: {list(cookies_dict.keys())}")
-                        
-                        raise Exception(f"API返回错误: {error_msg}")
-                    
-                    # 解析商品数据
-                    items = result_json.get("data", {}).get("resultList", [])
-                    logger.info(f"从API获取到 {len(items)} 条原始数据")
-                    
-                    data_list = []
-                    for item in items:
-                        try:
-                            parsed_item = await self._parse_real_item(item)
-                            if parsed_item:
-                                data_list.append(parsed_item)
-                        except Exception as parse_error:
-                            logger.warning(f"解析单个商品失败: {str(parse_error)}")
-                            continue
-                    
-                    # 获取总数
-                    total = result_json.get("data", {}).get("totalCount", len(data_list))
-                    
-                    return {
-                        'items': data_list,
-                        'total': total,
-                        'is_real_data': True,
-                        'source': 'api',
-                        'page': page,
-                        'page_size': page_size
-                    }
-                    
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"API搜索失败: {error_msg}")
-            return {
-                'items': [],
-                'total': 0,
-                'error': f'API搜索失败: {error_msg}'
-            }
 
     async def set_browser_cookies(self, cookie_value: str):
         """设置浏览器cookies"""
@@ -1049,7 +767,7 @@ class XianyuSearcher:
     
     async def search_items(self, keyword: str, page: int = 1, page_size: int = 20) -> Dict[str, Any]:
         """
-        搜索闲鱼商品 - 使用直接API调用方式（按最新发布排序）
+        搜索闲鱼商品 - 使用 Playwright 获取真实数据
 
         Args:
             keyword: 搜索关键词
@@ -1059,16 +777,162 @@ class XianyuSearcher:
         Returns:
             搜索结果字典，包含items列表和总数
         """
-        if not AIOHTTP_AVAILABLE:
-            logger.error("aiohttp 不可用，无法使用API方式搜索")
+        try:
+            if not PLAYWRIGHT_AVAILABLE:
+                logger.error("Playwright 不可用，无法获取真实数据")
+                return {
+                    'items': [],
+                    'total': 0,
+                    'error': 'Playwright 不可用，无法获取真实数据'
+                }
+
+            logger.info(f"使用 Playwright 搜索闲鱼商品: 关键词='{keyword}', 页码={page}, 每页={page_size}")
+
+            await self.init_browser()
+
+            # 清空之前的API响应
+            self.api_responses = []
+            data_list = []
+
+            # 设置API响应监听器
+            async def on_response(response):
+                """处理API响应，解析数据"""
+                if "h5api.m.goofish.com/h5/mtop.taobao.idlemtopsearch.pc.search" in response.url:
+                    try:
+                        # 检查响应状态
+                        if response.status != 200:
+                            logger.warning(f"API响应状态异常: {response.status}")
+                            return
+
+                        # 安全地获取响应内容
+                        try:
+                            result_json = await response.json()
+                        except Exception as json_error:
+                            logger.warning(f"无法解析响应JSON: {str(json_error)}")
+                            return
+
+                        self.api_responses.append(result_json)
+                        logger.info(f"捕获到API响应，URL: {response.url}")
+
+                        items = result_json.get("data", {}).get("resultList", [])
+                        logger.info(f"从API获取到 {len(items)} 条原始数据")
+
+                        for item in items:
+                            try:
+                                parsed_item = await self._parse_real_item(item)
+                                if parsed_item:
+                                    data_list.append(parsed_item)
+                            except Exception as parse_error:
+                                logger.warning(f"解析单个商品失败: {str(parse_error)}")
+                                continue
+
+                    except Exception as e:
+                        logger.warning(f"响应处理异常: {str(e)}")
+
+            try:
+                # 获取并设置cookies进行登录
+                logger.info("正在获取有效的cookies账户...")
+                cookie_data = await self.get_first_valid_cookie()
+                if not cookie_data:
+                    raise Exception("未找到有效的cookies账户，请先在Cookie管理中添加有效的闲鱼账户")
+
+                logger.info(f"使用账户: {cookie_data.get('id', 'unknown')}")
+
+                logger.info("正在访问闲鱼首页...")
+                await self.page.goto("https://www.goofish.com", timeout=30000)
+
+                # 设置cookies进行登录
+                logger.info("正在设置cookies进行登录...")
+                cookie_success = await self.set_browser_cookies(cookie_data.get('value', ''))
+                if not cookie_success:
+                    logger.warning("设置cookies失败，将以未登录状态继续")
+                else:
+                    logger.info("✅ cookies设置成功，已登录")
+                    # 刷新页面以应用cookies
+                    await self.page.reload()
+                    await asyncio.sleep(2)
+               
+                    
+
+                await self.page.wait_for_load_state("networkidle", timeout=10000)
+
+                logger.info(f"正在搜索关键词: {keyword}")
+                await self.page.fill('input[class*="search-input"]', keyword)
+
+                # 注册响应监听
+                self.page.on("response", on_response)
+
+                await self.page.click('button[type="submit"]')
+                                  
+                await self.page.wait_for_load_state("networkidle", timeout=15000)
+
+                # 等待第一页API响应（缩短等待时间）
+                logger.info("等待第一页API响应...")
+                await asyncio.sleep(2)
+                
+                # 尝试处理弹窗
+                try:
+                    await self.page.keyboard.press('Escape')
+                    await asyncio.sleep(0.5)
+                except:
+                    pass
+                # 【核心】检测并处理滑块验证 → 使用公共方法
+                logger.info(f"检测是否有滑块验证...")
+                slider_result = await self.handle_slider_verification(
+                    page=self.page,
+                    context=self.context,
+                    browser=self.browser,
+                    playwright=getattr(self, 'playwright', None),
+                    max_retries=5
+                )
+                
+                if not slider_result:
+                    logger.error(f"❌ 滑块验证失败，搜索终止")
+                    return None
+                # 等待更多数据
+                await asyncio.sleep(3)
+
+                first_page_count = len(data_list)
+                logger.info(f"第1页完成，获取到 {first_page_count} 条数据")
+
+                # 如果需要获取指定页数据，实现翻页逻辑
+                if page > 1:
+                    # 清空之前的数据，只保留目标页的数据
+                    data_list.clear()
+                    await self._navigate_to_page(page)
+
+                # 根据"人想要"数量进行倒序排列
+                data_list.sort(key=lambda x: x.get('want_count', 0), reverse=True)
+
+                total_count = len(data_list)
+                logger.info(f"搜索完成，总共获取到 {total_count} 条真实数据，已按想要人数排序")
+
+                return {
+                    'items': data_list,
+                    'total': total_count,
+                    'is_real_data': True,
+                    'source': 'playwright'
+                }
+
+            finally:
+                await self.close_browser()
+
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Playwright 搜索失败: {error_msg}")
+
+            # 检查是否是浏览器安装问题
+            if "Executable doesn't exist" in error_msg or "playwright install" in error_msg:
+                error_msg = "浏览器未安装。请在Docker容器中运行: playwright install chromium"
+            elif "BrowserType.launch" in error_msg:
+                error_msg = "浏览器启动失败。请确保Docker容器有足够的权限和资源"
+
+            # 如果 Playwright 失败，返回错误信息
             return {
                 'items': [],
                 'total': 0,
-                'error': 'aiohttp 未安装，请安装: pip install aiohttp'
+                'error': f'搜索失败: {error_msg}'
             }
-        
-        logger.info(f"使用API方式搜索闲鱼商品: 关键词='{keyword}', 页码={page}, 每页={page_size}")
-        return await self.search_items_via_api(keyword, page, page_size)
 
     async def _get_fallback_data(self, keyword: str, page: int, page_size: int) -> Dict[str, Any]:
         """获取备选数据（模拟数据）"""
@@ -1299,7 +1163,7 @@ class XianyuSearcher:
 
     async def search_multiple_pages(self, keyword: str, total_pages: int = 1) -> Dict[str, Any]:
         """
-        搜索多页闲鱼商品 - 使用API方式
+        搜索多页闲鱼商品
 
         Args:
             keyword: 搜索关键词
@@ -1308,64 +1172,25 @@ class XianyuSearcher:
         Returns:
             搜索结果字典，包含所有页面的items列表和总数
         """
-        if not AIOHTTP_AVAILABLE:
-            logger.error("aiohttp 不可用，无法使用API方式搜索")
-            return {
-                'items': [],
-                'total': 0,
-                'error': 'aiohttp 未安装，请安装: pip install aiohttp'
-            }
-
-        logger.info(f"使用API方式搜索多页闲鱼商品: 关键词='{keyword}', 总页数={total_pages}")
-
-        all_items = []
-        total_count = 0
-
+        browser_initialized = False
         try:
-            # 循环调用API获取每一页数据
-            for page in range(1, total_pages + 1):
-                logger.info(f"正在获取第 {page}/{total_pages} 页数据...")
-                page_result = await self.search_items_via_api(keyword, page, page_size=30)
-                
-                if page_result.get('error'):
-                    logger.warning(f"第 {page} 页获取失败: {page_result.get('error')}")
-                    # 如果某一页失败，继续获取其他页
-                    continue
-                
-                page_items = page_result.get('items', [])
-                all_items.extend(page_items)
-                
-                # 更新总数（使用第一页的总数）
-                if page == 1:
-                    total_count = page_result.get('total', len(page_items))
-                
-                # 如果当前页数据少于预期，可能已经到最后一页
-                if len(page_items) < 30:
-                    logger.info(f"第 {page} 页数据少于30条，可能已到最后一页")
-                    break
-                
-                # 避免请求过快
-                if page < total_pages:
-                    await asyncio.sleep(0.5)
-            
-            logger.info(f"多页搜索完成，共获取 {len(all_items)} 条数据")
-            
-            return {
-                'items': all_items,
-                'total': total_count,
-                'is_real_data': True,
-                'source': 'api',
-                'total_pages': total_pages
-            }
-            
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"多页API搜索失败: {error_msg}")
-            return {
-                'items': all_items if all_items else [],
-                'total': len(all_items),
-                'error': f'多页API搜索失败: {error_msg}'
-            }
+            if not PLAYWRIGHT_AVAILABLE:
+                logger.error("Playwright 不可用，无法获取真实数据")
+                return {
+                    'items': [],
+                    'total': 0,
+                    'error': 'Playwright 不可用，无法获取真实数据'
+                }
+
+            logger.info(f"使用 Playwright 搜索多页闲鱼商品: 关键词='{keyword}', 总页数={total_pages}")
+
+            # 确保浏览器初始化
+            await self.init_browser()
+            browser_initialized = True
+
+            # 验证浏览器状态
+            if not self.browser or not self.page:
+                raise Exception("浏览器初始化失败")
 
             logger.info("浏览器初始化成功，开始搜索...")
 

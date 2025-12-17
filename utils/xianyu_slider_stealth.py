@@ -505,7 +505,7 @@ class XianyuSliderStealth:
             return []
     
     def _save_success_record(self, trajectory_data: Dict[str, Any]):
-        """保存成功记录"""
+        """保存成功记录（增强版 - 记录所有随机参数用于学习优化）"""
         try:
             # 确保目录存在
             os.makedirs(os.path.dirname(self.success_history_file), exist_ok=True)
@@ -513,13 +513,44 @@ class XianyuSliderStealth:
             # 加载现有历史
             history = self._load_success_history()
             
-            # 添加新记录 - 只保存必要参数，不保存完整轨迹点（节省内存和磁盘空间）
+            # 获取随机参数
+            random_params = trajectory_data.get("random_params", {})
+            slide_behavior = trajectory_data.get("slide_behavior", {})
+            
+            # 添加新记录 - 保存完整的随机参数用于学习
             record = {
                 "timestamp": time.time(),
+                "datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "user_id": self.pure_user_id,
                 "distance": trajectory_data.get("distance", 0),
                 "total_steps": trajectory_data.get("total_steps", 0),
-                "base_delay": trajectory_data.get("base_delay", 0),
+                "model": trajectory_data.get("model", "unknown"),
+                # 新增：保存所有轨迹生成的随机参数
+                "overshoot_ratio": random_params.get("overshoot_ratio", 0),
+                "base_delay": random_params.get("base_delay", 0),
+                "acceleration_curve": random_params.get("acceleration_curve", 0),
+                "y_jitter_max": random_params.get("y_jitter_max", 0),
+                "random_state_snapshot": random_params.get("random_state_snapshot", []),
+                # 新增：保存所有滑动行为的随机参数（18个随机因素）
+                "slide_behavior": {
+                    "approach_offset_x": slide_behavior.get("approach_offset_x", 0),
+                    "approach_offset_y": slide_behavior.get("approach_offset_y", 0),
+                    "approach_steps": slide_behavior.get("approach_steps", 0),
+                    "approach_pause": slide_behavior.get("approach_pause", 0),
+                    "precision_steps": slide_behavior.get("precision_steps", 0),
+                    "precision_pause": slide_behavior.get("precision_pause", 0),
+                    "skip_hover": slide_behavior.get("skip_hover", False),
+                    "hover_pause": slide_behavior.get("hover_pause", 0),
+                    "pre_down_pause": slide_behavior.get("pre_down_pause", 0),
+                    "post_down_pause": slide_behavior.get("post_down_pause", 0),
+                    "move_steps_range": slide_behavior.get("move_steps_range", (1, 3)),
+                    "delay_variation": slide_behavior.get("delay_variation", (0.9, 1.1)),
+                    "pre_up_pause": slide_behavior.get("pre_up_pause", 0),
+                    "post_up_pause": slide_behavior.get("post_up_pause", 0),
+                    "total_elapsed_time": slide_behavior.get("total_elapsed_time", 0),
+                },
+                # 保留旧字段以兼容旧版本
+                "base_delay_old": trajectory_data.get("base_delay", 0),
                 "jitter_x_range": trajectory_data.get("jitter_x_range", [0, 0]),
                 "jitter_y_range": trajectory_data.get("jitter_y_range", [0, 0]),
                 "slow_factor": trajectory_data.get("slow_factor", 0),
@@ -545,13 +576,19 @@ class XianyuSliderStealth:
             with open(self.success_history_file, 'w', encoding='utf-8') as f:
                 json.dump(history, f, ensure_ascii=False, indent=2)
             
-            logger.info(f"【{self.pure_user_id}】保存成功记录: 距离{record['distance']}px, 步数{record['total_steps']}, 轨迹点{record['trajectory_point_count']}个")
+            # 统计滑动行为参数数量
+            behavior_params_count = len([k for k in slide_behavior.keys() if not k.startswith('hesitation_at_')])
+            
+            logger.info(f"【{self.pure_user_id}】✅ 保存成功记录: "
+                       f"距离{record['distance']:.1f}px, 步数{record['total_steps']}, "
+                       f"超调{record['overshoot_ratio']:.2f}x, 加速^{record['acceleration_curve']:.2f}, "
+                       f"行为参数{behavior_params_count}个")
             
         except Exception as e:
             logger.error(f"【{self.pure_user_id}】保存成功记录失败: {e}")
     
     def _optimize_trajectory_params(self) -> Dict[str, Any]:
-        """基于历史成功数据优化轨迹参数"""
+        """基于历史成功数据优化轨迹参数（增强版 - 智能学习）"""
         try:
             if not self.enable_learning:
                 return self.trajectory_params
@@ -561,33 +598,13 @@ class XianyuSliderStealth:
                 logger.info(f"【{self.pure_user_id}】历史成功数据不足({len(history)}条)，使用默认参数")
                 return self.trajectory_params
             
-            # 计算成功记录的平均值
-            total_steps_list = [record["total_steps"] for record in history]
-            base_delay_list = [record["base_delay"] for record in history]
-            slow_factor_list = [record["slow_factor"] for record in history]
-            acceleration_phase_list = [record["acceleration_phase"] for record in history]
-            fast_phase_list = [record["fast_phase"] for record in history]
-            slow_start_ratio_list = [record["slow_start_ratio"] for record in history]
-            
-            # 基于完整轨迹数据的学习
-            completion_usage_rate = 0
-            avg_completion_steps = 0
-            trajectory_length_stats = []
-            
-            if len(history) > 0:
-                # 计算补全使用率
-                completion_used_count = sum(1 for record in history if record.get("completion_used", False))
-                completion_usage_rate = completion_used_count / len(history)
-                
-                # 计算平均补全步数
-                completion_steps_list = [record.get("completion_steps", 0) for record in history if record.get("completion_used", False)]
-                if completion_steps_list:
-                    avg_completion_steps = sum(completion_steps_list) / len(completion_steps_list)
-                
-                # 分析轨迹长度分布
-                trajectory_lengths = [len(record.get("trajectory_points", [])) for record in history]
-                if trajectory_lengths:
-                    trajectory_length_stats = [min(trajectory_lengths), max(trajectory_lengths), sum(trajectory_lengths) / len(trajectory_lengths)]
+            # 🎯 新版参数学习：基于新的随机参数结构
+            # 收集新版参数（overshoot_ratio, acceleration_curve等）
+            overshoot_ratios = [record.get("overshoot_ratio", 2.0) for record in history if record.get("overshoot_ratio")]
+            base_delays = [record.get("base_delay", 0.0004) for record in history if record.get("base_delay")]
+            acceleration_curves = [record.get("acceleration_curve", 1.5) for record in history if record.get("acceleration_curve")]
+            y_jitter_maxs = [record.get("y_jitter_max", 2.0) for record in history if record.get("y_jitter_max")]
+            total_steps_list = [record.get("total_steps", 6) for record in history]
             
             # 计算平均值和标准差
             def safe_avg(values):
@@ -600,41 +617,277 @@ class XianyuSliderStealth:
                 variance = sum((x - avg) ** 2 for x in values) / len(values)
                 return variance ** 0.5
             
-            # 优化参数 - 真实人类模式（优先真实度而非速度）
-            # 计算步数范围（确保最小值 < 最大值）
-            steps_min = max(110, int(safe_avg(total_steps_list) - safe_std(total_steps_list) * 0.8))
-            steps_max = min(130, int(safe_avg(total_steps_list) + safe_std(total_steps_list) * 0.8))
-            if steps_min >= steps_max:
-                steps_min = 115
-                steps_max = 125
+            def safe_percentile(values, percentile):
+                """计算百分位数"""
+                if not values:
+                    return 0
+                sorted_values = sorted(values)
+                index = int(len(sorted_values) * percentile)
+                return sorted_values[min(index, len(sorted_values) - 1)]
             
-            # 计算延迟范围（确保最小值 < 最大值）
-            delay_min = max(0.020, safe_avg(base_delay_list) - safe_std(base_delay_list) * 0.6)
-            delay_max = min(0.030, safe_avg(base_delay_list) + safe_std(base_delay_list) * 0.6)
-            if delay_min >= delay_max:
-                delay_min = 0.022
-                delay_max = 0.027
+            # 🧠 智能学习策略：
+            # 1. 使用成功记录的中位数作为中心值（更稳定）
+            # 2. 使用标准差的0.5倍作为范围（保持随机性）
+            # 3. 对于成功率高的参数，缩小范围；成功率低的参数，扩大范围
             
-            # 计算慢速因子范围（确保最小值 < 最大值）
-            slow_min = max(5, int(safe_avg(slow_factor_list) - safe_std(slow_factor_list)))
-            slow_max = min(20, int(safe_avg(slow_factor_list) + safe_std(slow_factor_list)))
-            if slow_min >= slow_max:
-                slow_min = 8
-                slow_max = 15
+            # 学习超调比例（关键参数）
+            if overshoot_ratios:
+                overshoot_median = safe_percentile(overshoot_ratios, 0.5)
+                overshoot_std = safe_std(overshoot_ratios)
+                overshoot_min = max(1.8, overshoot_median - overshoot_std * 0.3)
+                overshoot_max = min(2.3, overshoot_median + overshoot_std * 0.3)
+                
+                # 🔧 确保最小范围宽度（至少0.1的差距）
+                if overshoot_max - overshoot_min < 0.1:
+                    overshoot_min = max(1.8, overshoot_median - 0.05)
+                    overshoot_max = min(2.3, overshoot_median + 0.05)
+                
+                learned_overshoot = (overshoot_min, overshoot_max)
+                logger.info(f"【{self.pure_user_id}】📚 学习到最优超调比例: {overshoot_min:.2f}-{overshoot_max:.2f}x "
+                           f"(中位数:{overshoot_median:.2f})")
+            else:
+                learned_overshoot = (2.0, 2.2)
             
+            # 学习基础延迟（影响速度感知）
+            if base_delays:
+                delay_median = safe_percentile(base_delays, 0.5)
+                delay_std = safe_std(base_delays)
+                delay_min = max(0.0001, delay_median - delay_std * 0.4)
+                delay_max = min(0.0008, delay_median + delay_std * 0.4)
+                
+                # 🔧 确保最小范围宽度（至少0.0002的差距，即0.2ms）
+                if delay_max - delay_min < 0.0002:
+                    delay_min = max(0.0001, delay_median - 0.0001)
+                    delay_max = min(0.0008, delay_median + 0.0001)
+                
+                learned_delay = (delay_min, delay_max)
+                logger.info(f"【{self.pure_user_id}】📚 学习到最优延迟: {delay_min*1000:.2f}-{delay_max*1000:.2f}ms "
+                           f"(中位数:{delay_median*1000:.2f}ms)")
+            else:
+                learned_delay = (0.0002, 0.0006)
+            
+            # 学习加速曲线（影响轨迹形状）
+            if acceleration_curves:
+                curve_median = safe_percentile(acceleration_curves, 0.5)
+                curve_std = safe_std(acceleration_curves)
+                curve_min = max(1.2, curve_median - curve_std * 0.3)
+                curve_max = min(1.9, curve_median + curve_std * 0.3)
+                
+                # 🔧 确保最小范围宽度（至少0.15的差距）
+                if curve_max - curve_min < 0.15:
+                    curve_min = max(1.2, curve_median - 0.075)
+                    curve_max = min(1.9, curve_median + 0.075)
+                
+                learned_curve = (curve_min, curve_max)
+                logger.info(f"【{self.pure_user_id}】📚 学习到最优加速曲线: ^{curve_min:.2f}-^{curve_max:.2f} "
+                           f"(中位数:^{curve_median:.2f})")
+            else:
+                learned_curve = (1.3, 1.8)
+            
+            # 学习Y轴抖动（影响真实感）
+            if y_jitter_maxs:
+                jitter_median = safe_percentile(y_jitter_maxs, 0.5)
+                jitter_std = safe_std(y_jitter_maxs)
+                jitter_min = max(0.5, jitter_median - jitter_std * 0.4)
+                jitter_max = min(4.0, jitter_median + jitter_std * 0.4)
+                
+                # 🔧 确保最小范围宽度（至少0.8的差距）
+                if jitter_max - jitter_min < 0.8:
+                    jitter_min = max(0.5, jitter_median - 0.4)
+                    jitter_max = min(4.0, jitter_median + 0.4)
+                
+                learned_jitter = (jitter_min, jitter_max)
+                logger.info(f"【{self.pure_user_id}】📚 学习到最优Y抖动: {jitter_min:.1f}-{jitter_max:.1f}px "
+                           f"(中位数:{jitter_median:.1f}px)")
+            else:
+                learned_jitter = (1.0, 3.0)
+            
+            # 学习步数范围
+            if total_steps_list:
+                steps_median = int(safe_percentile(total_steps_list, 0.5))
+                steps_std = safe_std(total_steps_list)
+                steps_min = max(5, int(steps_median - steps_std * 0.5))
+                steps_max = min(10, int(steps_median + steps_std * 0.5))
+                
+                # 🔧 确保最小范围宽度（至少2步的差距）
+                if steps_max - steps_min < 2:
+                    steps_min = max(5, steps_median - 1)
+                    steps_max = min(10, steps_median + 1)
+                
+                learned_steps = (steps_min, steps_max)
+                logger.info(f"【{self.pure_user_id}】📚 学习到最优步数: {steps_min}-{steps_max}步 "
+                           f"(中位数:{steps_median}步)")
+            else:
+                learned_steps = (5, 8)
+            
+            # 🎯 新增：学习滑动行为参数（18种行为参数）
+            logger.info(f"【{self.pure_user_id}】📚 开始学习滑动行为参数...")
+            
+            # 收集所有成功记录的滑动行为数据
+            slide_behaviors = [record.get("slide_behavior", {}) for record in history if record.get("slide_behavior")]
+            
+            learned_behavior = {}
+            
+            if slide_behaviors:
+                # 学习接近偏移
+                approach_offset_x_list = [b.get("approach_offset_x", -20) for b in slide_behaviors if b.get("approach_offset_x")]
+                if approach_offset_x_list:
+                    median = safe_percentile(approach_offset_x_list, 0.5)
+                    std = safe_std(approach_offset_x_list)
+                    x_min = max(-45, median - std * 0.5)
+                    x_max = min(-5, median + std * 0.5)
+                    # 🔧 确保最小范围宽度（至少10px）
+                    if x_max - x_min < 10:
+                        x_min = max(-45, median - 5)
+                        x_max = min(-5, median + 5)
+                    learned_behavior["approach_offset_x"] = (x_min, x_max)
+                
+                approach_offset_y_list = [b.get("approach_offset_y", 0) for b in slide_behaviors if b.get("approach_offset_y")]
+                if approach_offset_y_list:
+                    median = safe_percentile(approach_offset_y_list, 0.5)
+                    std = safe_std(approach_offset_y_list)
+                    y_min = max(-25, median - std * 0.5)
+                    y_max = min(25, median + std * 0.5)
+                    # 🔧 确保最小范围宽度（至少10px）
+                    if y_max - y_min < 10:
+                        y_min = max(-25, median - 5)
+                        y_max = min(25, median + 5)
+                    learned_behavior["approach_offset_y"] = (y_min, y_max)
+                
+                # 学习接近步数
+                approach_steps_list = [b.get("approach_steps", 7) for b in slide_behaviors if b.get("approach_steps")]
+                if approach_steps_list:
+                    median = int(safe_percentile(approach_steps_list, 0.5))
+                    std = safe_std(approach_steps_list)
+                    steps_min = max(3, int(median - std * 0.5))
+                    steps_max = min(15, int(median + std * 0.5))
+                    # 🔧 确保最小范围宽度（至少3步）
+                    if steps_max - steps_min < 3:
+                        steps_min = max(3, median - 2)
+                        steps_max = min(15, median + 2)
+                    learned_behavior["approach_steps"] = (steps_min, steps_max)
+                
+                # 学习停顿时间
+                approach_pause_list = [b.get("approach_pause", 0.2) for b in slide_behaviors if b.get("approach_pause")]
+                if approach_pause_list:
+                    median = safe_percentile(approach_pause_list, 0.5)
+                    std = safe_std(approach_pause_list)
+                    pause_min = max(0.05, median - std * 0.4)
+                    pause_max = min(0.5, median + std * 0.4)
+                    # 🔧 确保最小范围宽度（至少0.1秒）
+                    if pause_max - pause_min < 0.1:
+                        pause_min = max(0.05, median - 0.05)
+                        pause_max = min(0.5, median + 0.05)
+                    learned_behavior["approach_pause"] = (pause_min, pause_max)
+                
+                precision_steps_list = [b.get("precision_steps", 5) for b in slide_behaviors if b.get("precision_steps")]
+                if precision_steps_list:
+                    median = int(safe_percentile(precision_steps_list, 0.5))
+                    std = safe_std(precision_steps_list)
+                    steps_min = max(2, int(median - std * 0.5))
+                    steps_max = min(10, int(median + std * 0.5))
+                    # 🔧 确保最小范围宽度（至少2步）
+                    if steps_max - steps_min < 2:
+                        steps_min = max(2, median - 1)
+                        steps_max = min(10, median + 1)
+                    learned_behavior["precision_steps"] = (steps_min, steps_max)
+                
+                precision_pause_list = [b.get("precision_pause", 0.15) for b in slide_behaviors if b.get("precision_pause")]
+                if precision_pause_list:
+                    median = safe_percentile(precision_pause_list, 0.5)
+                    std = safe_std(precision_pause_list)
+                    pause_min = max(0.03, median - std * 0.4)
+                    pause_max = min(0.4, median + std * 0.4)
+                    # 🔧 确保最小范围宽度（至少0.08秒）
+                    if pause_max - pause_min < 0.08:
+                        pause_min = max(0.03, median - 0.04)
+                        pause_max = min(0.4, median + 0.04)
+                    learned_behavior["precision_pause"] = (pause_min, pause_max)
+                
+                # 学习悬停概率
+                skip_hover_list = [b.get("skip_hover", False) for b in slide_behaviors if "skip_hover" in b]
+                if skip_hover_list:
+                    skip_rate = sum(1 for x in skip_hover_list if x) / len(skip_hover_list)
+                    learned_behavior["skip_hover_rate"] = skip_rate
+                
+                hover_pause_list = [b.get("hover_pause", 0.2) for b in slide_behaviors if b.get("hover_pause")]
+                if hover_pause_list:
+                    median = safe_percentile(hover_pause_list, 0.5)
+                    std = safe_std(hover_pause_list)
+                    pause_min = max(0.03, median - std * 0.4)
+                    pause_max = min(0.5, median + std * 0.4)
+                    # 🔧 确保最小范围宽度（至少0.1秒）
+                    if pause_max - pause_min < 0.1:
+                        pause_min = max(0.03, median - 0.05)
+                        pause_max = min(0.5, median + 0.05)
+                    learned_behavior["hover_pause"] = (pause_min, pause_max)
+                
+                # 学习按下停顿
+                pre_down_list = [b.get("pre_down_pause", 0.1) for b in slide_behaviors if b.get("pre_down_pause")]
+                if pre_down_list:
+                    median = safe_percentile(pre_down_list, 0.5)
+                    std = safe_std(pre_down_list)
+                    pause_min = max(0.01, median - std * 0.4)
+                    pause_max = min(0.25, median + std * 0.4)
+                    # 🔧 确保最小范围宽度（至少0.05秒）
+                    if pause_max - pause_min < 0.05:
+                        pause_min = max(0.01, median - 0.025)
+                        pause_max = min(0.25, median + 0.025)
+                    learned_behavior["pre_down_pause"] = (pause_min, pause_max)
+                
+                post_down_list = [b.get("post_down_pause", 0.1) for b in slide_behaviors if b.get("post_down_pause")]
+                if post_down_list:
+                    median = safe_percentile(post_down_list, 0.5)
+                    std = safe_std(post_down_list)
+                    pause_min = max(0.01, median - std * 0.4)
+                    pause_max = min(0.25, median + std * 0.4)
+                    # 🔧 确保最小范围宽度（至少0.05秒）
+                    if pause_max - pause_min < 0.05:
+                        pause_min = max(0.01, median - 0.025)
+                        pause_max = min(0.25, median + 0.025)
+                    learned_behavior["post_down_pause"] = (pause_min, pause_max)
+                
+                logger.info(f"【{self.pure_user_id}】📚 成功学习{len(learned_behavior)}个滑动行为参数")
+            
+            # 基于完整轨迹数据的学习
+            completion_usage_rate = 0
+            avg_completion_steps = 0
+            
+            if len(history) > 0:
+                # 计算补全使用率
+                completion_used_count = sum(1 for record in history if record.get("completion_used", False))
+                completion_usage_rate = completion_used_count / len(history)
+                
+                # 计算平均补全步数
+                completion_steps_list = [record.get("completion_steps", 0) for record in history if record.get("completion_used", False)]
+                if completion_steps_list:
+                    avg_completion_steps = sum(completion_steps_list) / len(completion_steps_list)
+            
+            # 构建优化后的参数（新版结构）
             optimized_params = {
-                "total_steps_range": [steps_min, steps_max],
-                "base_delay_range": [delay_min, delay_max],
-                "jitter_x_range": [-3, 12],  # 保持固定范围
-                "jitter_y_range": [-2, 12],  # 保持固定范围
-                "slow_factor_range": [slow_min, slow_max],
-                "acceleration_phase": max(0.08, min(0.12, safe_avg(acceleration_phase_list))),
-                "fast_phase": max(0.7, min(0.8, safe_avg(fast_phase_list))),
-                "slow_start_ratio_base": max(0.98, min(1.02, safe_avg(slow_start_ratio_list))),
+                # 新版参数（基于学习结果）
+                "learned_overshoot_range": learned_overshoot,
+                "learned_delay_range": learned_delay,
+                "learned_curve_range": learned_curve,
+                "learned_jitter_range": learned_jitter,
+                "learned_steps_range": learned_steps,
+                # 🎯 新增：学习到的滑动行为参数
+                "learned_behavior": learned_behavior,
+                # 旧版参数（保留兼容性）
+                "total_steps_range": learned_steps,
+                "base_delay_range": learned_delay,
+                "jitter_x_range": [0, 1],
+                "jitter_y_range": [0, 1],
+                "slow_factor_range": [10, 15],
+                "acceleration_phase": 1.0,
+                "fast_phase": 1.0,
+                "slow_start_ratio_base": learned_overshoot[0],
+                # 学习统计
                 "completion_usage_rate": completion_usage_rate,
                 "avg_completion_steps": avg_completion_steps,
-                "trajectory_length_stats": trajectory_length_stats,
-                "learning_enabled": True
+                "learning_enabled": True,
+                "history_count": len(history),
+                "learning_version": "2.0"  # 标记为新版学习算法
             }
             
             logger.info(f"【{self.pure_user_id}】基于{len(history)}条成功记录优化轨迹参数: 步数{optimized_params['total_steps_range']}, 延迟{optimized_params['base_delay_range']}")
@@ -1198,60 +1451,149 @@ class XianyuSliderStealth:
             return t
     
     def _generate_physics_trajectory(self, distance: float):
-        """基于物理加速度模型生成轨迹 - 极速模式
+        """基于物理加速度模型生成轨迹 - 极速模式（增强随机性）
         
         优化策略：
         1. 极少轨迹点（5-8步）：快速完成
         2. 持续加速：一气呵成，不减速
         3. 确保超调50%以上：保证滑动到位
         4. 无回退：单向滑动
+        5. 每次都有随机变化：步数、速度、曲线都随机
+        
+        注意：此方法已被参数化版本取代，保留用于兼容性
         """
-        trajectory = []
-        # 确保超调100%
-        target_distance = distance * random.uniform(2.0, 2.1)  # 超调100-110%
-        
-        # 极少步数（5-8步）
+        # 生成随机参数
+        overshoot_ratio = random.uniform(2.0, 2.2)
         steps = random.randint(5, 8)
+        base_delay = random.uniform(0.0002, 0.0006)
+        acceleration_curve = random.uniform(1.3, 1.8)
+        y_jitter_max = random.uniform(1, 3)
         
-        # 极快时间间隔
-        base_delay = random.uniform(0.0002, 0.0005)
-        
-        # 生成轨迹点 - 直线加速
-        for i in range(steps):
-            progress = (i + 1) / steps
-            
-            # 计算当前位置（使用平方加速曲线，越来越快）
-            x = target_distance * (progress ** 1.5)  # 加速曲线
-            
-            # 极小Y轴抖动
-            y = random.uniform(0, 2)
-            
-            # 极短延迟
-            delay = base_delay * random.uniform(0.9, 1.1)
-            
-            trajectory.append((x, y, delay))
-        
-        logger.info(f"【{self.pure_user_id}】极速模式：{len(trajectory)}步，超调100%+")
-        return trajectory
+        # 调用参数化版本
+        return self._generate_physics_trajectory_with_params(
+            distance, overshoot_ratio, steps, base_delay,
+            acceleration_curve, y_jitter_max
+        )
     
-    def generate_human_trajectory(self, distance: float):
-        """生成人类化滑动轨迹 - 只使用极速物理模型"""
+    def generate_human_trajectory(self, distance: float, attempt: int = 1):
+        """生成人类化滑动轨迹 - 只使用极速物理模型（带智能学习+失败后增加扰动）
+        
+        Args:
+            distance: 滑动距离
+            attempt: 当前尝试次数（从1开始），用于在失败后增加随机扰动
+        """
         try:
+            # 记录轨迹生成前的随机种子状态（用于分析）
+            random_state_snapshot = random.getstate()[1][:5]  # 记录前5个随机状态
+            
+            # 🧠 尝试从历史成功数据中学习最优参数
+            optimized_params = self._optimize_trajectory_params()
+            
+            # 🔄 失败后增加随机扰动系数（第2次+10%，第3次+20%，以此类推）
+            perturbation_factor = 1.0 + (attempt - 1) * 0.1
+            if attempt > 1:
+                logger.info(f"【{self.pure_user_id}】🔄 第{attempt}次尝试：增加{(perturbation_factor-1)*100:.0f}%随机扰动")
+            
             # 只使用物理加速度模型（移除贝塞尔模型以提高速度和稳定性）
-            logger.info(f"【{self.pure_user_id}】📐 使用极速物理模型生成轨迹")
-            trajectory = self._generate_physics_trajectory(distance)
+            if optimized_params.get("learning_enabled") and optimized_params.get("history_count", 0) >= 3:
+                logger.info(f"【{self.pure_user_id}】📐 使用智能学习模型生成轨迹 "
+                           f"(基于{optimized_params['history_count']}条成功记录)")
+                
+                # 🎯 使用学习到的参数范围
+                learned_overshoot = optimized_params.get("learned_overshoot_range", (2.0, 2.2))
+                learned_delay = optimized_params.get("learned_delay_range", (0.0002, 0.0006))
+                learned_curve = optimized_params.get("learned_curve_range", (1.3, 1.8))
+                learned_jitter = optimized_params.get("learned_jitter_range", (1, 3))
+                learned_steps = optimized_params.get("learned_steps_range", (5, 8))
+                
+                # 🔄 失败后扩大参数范围
+                if attempt > 1:
+                    # 扩大超调比例范围
+                    range_width = learned_overshoot[1] - learned_overshoot[0]
+                    extra_range = range_width * (perturbation_factor - 1.0)
+                    learned_overshoot = (
+                        max(1.8, learned_overshoot[0] - extra_range/2),
+                        min(2.4, learned_overshoot[1] + extra_range/2)
+                    )
+                    
+                    # 扩大延迟范围
+                    range_width = learned_delay[1] - learned_delay[0]
+                    extra_range = range_width * (perturbation_factor - 1.0)
+                    learned_delay = (
+                        max(0.0001, learned_delay[0] - extra_range/2),
+                        min(0.001, learned_delay[1] + extra_range/2)
+                    )
+                    
+                    # 扩大加速曲线范围
+                    range_width = learned_curve[1] - learned_curve[0]
+                    extra_range = range_width * (perturbation_factor - 1.0)
+                    learned_curve = (
+                        max(1.2, learned_curve[0] - extra_range/2),
+                        min(2.0, learned_curve[1] + extra_range/2)
+                    )
+                    
+                    # 扩大Y抖动范围
+                    range_width = learned_jitter[1] - learned_jitter[0]
+                    extra_range = range_width * (perturbation_factor - 1.0)
+                    learned_jitter = (
+                        max(0.5, learned_jitter[0] - extra_range/2),
+                        min(4.5, learned_jitter[1] + extra_range/2)
+                    )
+                
+                # 预生成随机参数（在学习范围内随机）
+                overshoot_ratio = random.uniform(learned_overshoot[0], learned_overshoot[1])
+                steps = random.randint(learned_steps[0], learned_steps[1])
+                base_delay = random.uniform(learned_delay[0], learned_delay[1])
+                acceleration_curve = random.uniform(learned_curve[0], learned_curve[1])
+                y_jitter_max = random.uniform(learned_jitter[0], learned_jitter[1])
+                
+                logger.info(f"【{self.pure_user_id}】🎯 应用学习参数: 超调{overshoot_ratio:.2f}x, "
+                           f"步数{steps}, 延迟{base_delay*1000:.2f}ms, 曲线^{acceleration_curve:.2f}")
+            else:
+                logger.info(f"【{self.pure_user_id}】📐 使用默认物理模型生成轨迹")
+                
+                # 预生成随机参数（使用默认范围）
+                # 🔄 失败后扩大默认范围
+                if attempt > 1:
+                    overshoot_ratio = random.uniform(1.9 - perturbation_factor*0.1, 2.3 + perturbation_factor*0.1)
+                    base_delay = random.uniform(0.0001, 0.0008)
+                    acceleration_curve = random.uniform(1.2, 1.9)
+                    y_jitter_max = random.uniform(0.5, 4.0)
+                else:
+                    overshoot_ratio = random.uniform(2.0, 2.2)
+                    base_delay = random.uniform(0.0002, 0.0006)
+                    acceleration_curve = random.uniform(1.3, 1.8)
+                    y_jitter_max = random.uniform(1, 3)
+                
+                steps = random.randint(5, 8)
+            
+            # 生成轨迹（使用上面预生成的参数）
+            trajectory = self._generate_physics_trajectory_with_params(
+                distance, overshoot_ratio, steps, base_delay, 
+                acceleration_curve, y_jitter_max
+            )
             
             logger.debug(f"【{self.pure_user_id}】极速模式：一次拖到位，无回退")
             
-            # 保存轨迹数据
+            # 保存轨迹数据（包含所有随机参数）
             self.current_trajectory_data = {
                 "distance": distance,
-                "model": "physics_fast",
+                "model": "physics_fast_learned" if optimized_params.get("learning_enabled") else "physics_fast",
                 "total_steps": len(trajectory),
                 "trajectory_points": trajectory.copy(),
                 "final_left_px": 0,
                 "completion_used": False,
-                "completion_steps": 0
+                "completion_steps": 0,
+                # 新增：记录所有随机参数
+                "random_params": {
+                    "overshoot_ratio": overshoot_ratio,
+                    "steps": steps,
+                    "base_delay": base_delay,
+                    "acceleration_curve": acceleration_curve,
+                    "y_jitter_max": y_jitter_max,
+                    "random_state_snapshot": list(random_state_snapshot),
+                    "is_learned": optimized_params.get("learning_enabled", False)
+                }
             }
             
             return trajectory
@@ -1260,13 +1602,60 @@ class XianyuSliderStealth:
             logger.error(f"【{self.pure_user_id}】生成轨迹时出错: {str(e)}")
             return []
     
-    def simulate_slide(self, slider_button: ElementHandle, trajectory):
-        """模拟滑动 - 优化版本（基于高成功率策略）"""
-        try:
-            logger.info(f"【{self.pure_user_id}】开始优化滑动模拟...")
+    def _generate_physics_trajectory_with_params(self, distance: float, 
+                                                  overshoot_ratio: float,
+                                                  steps: int,
+                                                  base_delay: float,
+                                                  acceleration_curve: float,
+                                                  y_jitter_max: float):
+        """使用指定参数生成物理轨迹（用于参数记录和复现）"""
+        trajectory = []
+        
+        target_distance = distance * overshoot_ratio
+        
+        # 随机：延迟波动范围
+        delay_variation_min = random.uniform(0.7, 0.9)
+        delay_variation_max = random.uniform(1.1, 1.3)
+        
+        # 生成轨迹点
+        for i in range(steps):
+            progress = (i + 1) / steps
             
-            # 等待页面稳定
-            time.sleep(random.uniform(0.1, 0.3))
+            # 计算当前位置
+            x = target_distance * (progress ** acceleration_curve)
+            
+            # Y轴位置随机
+            y = random.uniform(-y_jitter_max/2, y_jitter_max/2)
+            
+            # 延迟随机
+            delay = base_delay * random.uniform(delay_variation_min, delay_variation_max)
+            
+            # 中间某些点添加微小停顿（10%概率）
+            if i > 0 and i < steps - 1 and random.random() < 0.1:
+                delay *= random.uniform(1.5, 2.0)
+            
+            trajectory.append((x, y, delay))
+        
+        logger.info(f"【{self.pure_user_id}】极速模式：{len(trajectory)}步，超调{(overshoot_ratio-1)*100:.0f}%，"
+                   f"加速曲线^{acceleration_curve:.2f}")
+        return trajectory
+    
+    def simulate_slide(self, slider_button: ElementHandle, trajectory):
+        """模拟滑动 - 优化版本（增强随机性+智能学习）"""
+        try:
+            # 🧠 获取学习到的行为参数
+            optimized_params = self._optimize_trajectory_params()
+            learned_behavior = optimized_params.get("learned_behavior", {})
+            is_learned = optimized_params.get("learning_enabled", False) and len(learned_behavior) > 0
+            
+            if is_learned:
+                logger.info(f"【{self.pure_user_id}】🧠 应用学习到的滑动行为参数（{len(learned_behavior)}个）")
+            else:
+                logger.info(f"【{self.pure_user_id}】开始优化滑动模拟...")
+            
+            # 🎲 随机1：页面稳定等待时间随机化（0.05-0.4秒）
+            page_wait = random.uniform(0.05, 0.4)
+            time.sleep(page_wait)
             
             # 获取滑块按钮中心位置
             button_box = slider_button.bounding_box()
@@ -1278,41 +1667,135 @@ class XianyuSliderStealth:
             start_y = button_box["y"] + button_box["height"] / 2
             logger.debug(f"【{self.pure_user_id}】滑块位置: ({start_x}, {start_y})")
             
+            # 记录滑动行为参数（用于学习）
+            slide_behavior = {}
+            
             # 第一阶段：移动到滑块附近（模拟人类寻找滑块）
             try:
-                # 先移动到滑块附近（稍微偏左）
-                offset_x = random.uniform(-30, -10)
-                offset_y = random.uniform(-15, 15)
+                # 🎲 随机2：偏移量随机化（应用学习结果）
+                if "approach_offset_x" in learned_behavior:
+                    x_range = learned_behavior["approach_offset_x"]
+                    offset_x = random.uniform(x_range[0], x_range[1])
+                    logger.debug(f"【{self.pure_user_id}】🧠 使用学习的X偏移: {x_range[0]:.1f}~{x_range[1]:.1f}")
+                else:
+                    offset_x = random.uniform(-40, -10)
+                
+                if "approach_offset_y" in learned_behavior:
+                    y_range = learned_behavior["approach_offset_y"]
+                    offset_y = random.uniform(y_range[0], y_range[1])
+                else:
+                    offset_y = random.uniform(-20, 20)
+                
+                slide_behavior['approach_offset_x'] = offset_x
+                slide_behavior['approach_offset_y'] = offset_y
+                
+                # 🎲 随机3：接近步数随机化（应用学习结果）
+                if "approach_steps" in learned_behavior:
+                    steps_range = learned_behavior["approach_steps"]
+                    approach_steps = random.randint(steps_range[0], steps_range[1])
+                    logger.debug(f"【{self.pure_user_id}】🧠 使用学习的接近步数: {steps_range[0]}~{steps_range[1]}")
+                else:
+                    approach_steps = random.randint(3, 12)
+                
+                slide_behavior['approach_steps'] = approach_steps
+                
                 self.page.mouse.move(
                     start_x + offset_x,
                     start_y + offset_y,
-                    steps=random.randint(5, 10)
+                    steps=approach_steps
                 )
-                time.sleep(random.uniform(0.15, 0.3))
                 
-                # 再精确移动到滑块中心
+                # 🎲 随机4：接近后停顿随机化（应用学习结果）
+                if "approach_pause" in learned_behavior:
+                    pause_range = learned_behavior["approach_pause"]
+                    approach_pause = random.uniform(pause_range[0], pause_range[1])
+                else:
+                    approach_pause = random.uniform(0.1, 0.4)
+                
+                slide_behavior['approach_pause'] = approach_pause
+                time.sleep(approach_pause)
+                
+                # 🎲 随机5：精确定位步数随机化（应用学习结果）
+                if "precision_steps" in learned_behavior:
+                    steps_range = learned_behavior["precision_steps"]
+                    precision_steps = random.randint(steps_range[0], steps_range[1])
+                else:
+                    precision_steps = random.randint(2, 8)
+                
+                slide_behavior['precision_steps'] = precision_steps
+                
                 self.page.mouse.move(
                     start_x,
                     start_y,
-                    steps=random.randint(3, 6)
+                    steps=precision_steps
                 )
-                time.sleep(random.uniform(0.1, 0.25))
+                
+                # 🎲 随机6：定位后停顿随机化（应用学习结果）
+                if "precision_pause" in learned_behavior:
+                    pause_range = learned_behavior["precision_pause"]
+                    precision_pause = random.uniform(pause_range[0], pause_range[1])
+                else:
+                    precision_pause = random.uniform(0.05, 0.3)
+                
+                slide_behavior['precision_pause'] = precision_pause
+                time.sleep(precision_pause)
+                
             except Exception as e:
                 logger.warning(f"【{self.pure_user_id}】移动到滑块失败: {e}，继续尝试")
             
             # 第二阶段：悬停在滑块上
-            try:
-                slider_button.hover(timeout=2000)
-                time.sleep(random.uniform(0.1, 0.3))
-            except Exception as e:
-                logger.warning(f"【{self.pure_user_id}】悬停滑块失败: {e}")
+            # 🎲 随机7：跳过悬停概率（应用学习结果）
+            if "skip_hover_rate" in learned_behavior:
+                skip_hover = random.random() < learned_behavior["skip_hover_rate"]
+                logger.debug(f"【{self.pure_user_id}】🧠 使用学习的跳过悬停概率: {learned_behavior['skip_hover_rate']*100:.1f}%")
+            else:
+                skip_hover = random.random() < 0.1
+            
+            slide_behavior['skip_hover'] = skip_hover
+            
+            if not skip_hover:
+                try:
+                    slider_button.hover(timeout=2000)
+                    # 🎲 随机8：悬停时间随机化（应用学习结果）
+                    if "hover_pause" in learned_behavior:
+                        pause_range = learned_behavior["hover_pause"]
+                        hover_pause = random.uniform(pause_range[0], pause_range[1])
+                    else:
+                        hover_pause = random.uniform(0.05, 0.4)
+                    
+                    slide_behavior['hover_pause'] = hover_pause
+                    time.sleep(hover_pause)
+                except Exception as e:
+                    logger.warning(f"【{self.pure_user_id}】悬停滑块失败: {e}")
+            else:
+                logger.debug(f"【{self.pure_user_id}】跳过悬停（随机行为）")
             
             # 第三阶段：按下鼠标
             try:
                 self.page.mouse.move(start_x, start_y)
-                time.sleep(random.uniform(0.05, 0.15))
+                
+                # 🎲 随机9：按下前停顿随机化（应用学习结果）
+                if "pre_down_pause" in learned_behavior:
+                    pause_range = learned_behavior["pre_down_pause"]
+                    pre_down_pause = random.uniform(pause_range[0], pause_range[1])
+                else:
+                    pre_down_pause = random.uniform(0.02, 0.2)
+                
+                slide_behavior['pre_down_pause'] = pre_down_pause
+                time.sleep(pre_down_pause)
+                
                 self.page.mouse.down()
-                time.sleep(random.uniform(0.05, 0.15))
+                
+                # 🎲 随机10：按下后停顿随机化（应用学习结果）
+                if "post_down_pause" in learned_behavior:
+                    pause_range = learned_behavior["post_down_pause"]
+                    post_down_pause = random.uniform(pause_range[0], pause_range[1])
+                else:
+                    post_down_pause = random.uniform(0.02, 0.2)
+                
+                slide_behavior['post_down_pause'] = post_down_pause
+                time.sleep(post_down_pause)
+                
             except Exception as e:
                 logger.error(f"【{self.pure_user_id}】按下鼠标失败: {e}")
                 return False
@@ -1323,21 +1806,40 @@ class XianyuSliderStealth:
                 current_x = start_x
                 current_y = start_y
                 
+                # 🎲 随机11：每个轨迹点的移动步数随机化
+                move_steps_range = (1, random.randint(2, 4))  # 范围本身也随机
+                slide_behavior['move_steps_range'] = move_steps_range
+                
+                # 🎲 随机12：延迟波动范围随机化
+                delay_variation_min = random.uniform(0.8, 0.95)
+                delay_variation_max = random.uniform(1.05, 1.2)
+                slide_behavior['delay_variation'] = (delay_variation_min, delay_variation_max)
+                
                 # 执行拖动轨迹
                 for i, (x, y, delay) in enumerate(trajectory):
                     # 更新当前位置
                     current_x = start_x + x
                     current_y = start_y + y
                     
+                    # 🎲 随机13：每个点的移动步数都不同
+                    move_steps = random.randint(move_steps_range[0], move_steps_range[1])
+                    
                     # 移动鼠标
                     self.page.mouse.move(
                         current_x,
                         current_y,
-                        steps=random.randint(1, 3)
+                        steps=move_steps
                     )
                     
-                    # 延迟（添加微小随机变化）
-                    actual_delay = delay * random.uniform(0.9, 1.1)
+                    # 🎲 随机14：延迟使用自定义波动范围
+                    actual_delay = delay * random.uniform(delay_variation_min, delay_variation_max)
+                    
+                    # 🎲 随机15：5%概率在某个点增加额外停顿（模拟人类犹豫）
+                    if i > 0 and i < len(trajectory) - 1 and random.random() < 0.05:
+                        hesitation = random.uniform(0.05, 0.15)
+                        actual_delay += hesitation
+                        slide_behavior[f'hesitation_at_{i}'] = hesitation
+                    
                     time.sleep(actual_delay)
                     
                     # 记录最终位置
@@ -1359,14 +1861,24 @@ class XianyuSliderStealth:
                 # 🎨 刮刮乐特殊处理：在目标位置停顿观察
                 is_scratch = self.is_scratch_captcha()
                 if is_scratch:
-                    pause_duration = random.uniform(0.3, 0.5)
+                    # 🎲 随机16：刮刮乐停顿时间随机化（0.2-0.6秒）
+                    pause_duration = random.uniform(0.2, 0.6)
+                    slide_behavior['scratch_pause'] = pause_duration
                     logger.warning(f"【{self.pure_user_id}】🎨 刮刮乐模式：在目标位置停顿{pause_duration:.2f}秒观察...")
                     time.sleep(pause_duration)
                 
+                # 🎲 随机17：释放前停顿随机化（0.01-0.08秒）
+                pre_up_pause = random.uniform(0.01, 0.08)
+                slide_behavior['pre_up_pause'] = pre_up_pause
+                time.sleep(pre_up_pause)
+                
                 # 释放鼠标
-                time.sleep(random.uniform(0.02, 0.05))
                 self.page.mouse.up()
-                time.sleep(random.uniform(0.01, 0.03))
+                
+                # 🎲 随机18：释放后停顿随机化（0.005-0.05秒）
+                post_up_pause = random.uniform(0.005, 0.05)
+                slide_behavior['post_up_pause'] = post_up_pause
+                time.sleep(post_up_pause)
                 
                 # 触发click事件
                 try:
@@ -1387,7 +1899,19 @@ class XianyuSliderStealth:
                     logger.debug(f"【{self.pure_user_id}】触发click事件失败（可忽略）: {e}")
                 
                 elapsed_time = time.time() - start_time
-                logger.info(f"【{self.pure_user_id}】滑动完成: 耗时={elapsed_time:.2f}秒, 最终位置=({current_x:.1f}, {current_y:.1f})")
+                slide_behavior['total_elapsed_time'] = elapsed_time
+                slide_behavior['used_learned_params'] = is_learned  # 标记是否使用了学习参数
+                
+                # 💾 保存滑动行为参数到轨迹数据（用于成功后学习）
+                if hasattr(self, 'current_trajectory_data'):
+                    self.current_trajectory_data['slide_behavior'] = slide_behavior
+                    logger.debug(f"【{self.pure_user_id}】已记录{len(slide_behavior)}个滑动行为参数")
+                
+                learn_status = "🧠智能学习模式" if is_learned else "🎲随机模式"
+                logger.info(f"【{self.pure_user_id}】滑动完成 [{learn_status}]: "
+                           f"耗时={elapsed_time:.2f}秒, "
+                           f"最终位置=({current_x:.1f}, {current_y:.1f}), "
+                           f"行为参数={len(slide_behavior)}个")
                 
                 return True
                 
@@ -1483,8 +2007,16 @@ class XianyuSliderStealth:
             slider_container = None
             found_frame = None
             
+            # 🔑 优化：如果是重试且之前在"已知位置"查找失败，跳过已知位置，直接全局搜索
+            skip_known_location = False
+            if hasattr(self, '_slider_search_failed_in_known_location') and self._slider_search_failed_in_known_location:
+                logger.warning(f"【{self.pure_user_id}】上次在已知位置查找失败，本次跳过已知位置，直接全局搜索")
+                skip_known_location = True
+                # 清除标记，避免影响下次验证
+                self._slider_search_failed_in_known_location = False
+            
             # 如果检测时已经知道滑块在哪个frame中，直接在该frame中查找
-            if hasattr(self, '_detected_slider_frame'):
+            if not skip_known_location and hasattr(self, '_detected_slider_frame'):
                 if self._detected_slider_frame is not None:
                     # 在已知的frame中查找
                     logger.info(f"【{self.pure_user_id}】已知滑块在frame中，直接在frame中查找...")
@@ -1513,7 +2045,7 @@ class XianyuSliderStealth:
                     logger.info(f"【{self.pure_user_id}】已知滑块在主页面，直接在主页面查找...")
                     for selector in container_selectors:
                         try:
-                            element = self.page.wait_for_selector(selector, timeout=1000)
+                            element = self.page.wait_for_selector(selector, timeout=2000)  # 增加超时时间
                             if element:
                                 logger.info(f"【{self.pure_user_id}】在已知主页面找到滑块容器: {selector}")
                                 slider_container = element
@@ -1806,72 +2338,110 @@ class XianyuSliderStealth:
                     logger.debug(f"【{self.pure_user_id}】选择器 {selector} 未找到: {e}")
                     continue
             
-            # 如果在找到按钮的frame中没找到轨道，先点击frame激活它，然后再查找
-            if not slider_track and track_search_frame and track_search_frame != self.page:
-                logger.warning(f"【{self.pure_user_id}】在已知Frame中未找到轨道，尝试点击frame激活后再查找...")
-                try:
-                    # 点击frame以激活它，让轨道出现
-                    # 尝试点击frame中的容器或按钮来激活
-                    if slider_container:
-                        try:
-                            slider_container.click(timeout=1000)
-                            logger.info(f"【{self.pure_user_id}】已点击滑块容器以激活frame")
-                            time.sleep(0.3)  # 等待轨道出现
-                        except:
-                            pass
-                    elif slider_button:
-                        try:
-                            slider_button.click(timeout=1000)
-                            logger.info(f"【{self.pure_user_id}】已点击滑块按钮以激活frame")
-                            time.sleep(0.3)  # 等待轨道出现
-                        except:
-                            pass
-                    
-                    # 再次在同一个frame中查找轨道
-                    for selector in track_selectors:
-                        try:
-                            element = track_search_frame.query_selector(selector)
-                            if element:
+            # 🔑 关键修复：如果在找到按钮的位置没找到轨道，尝试其他位置
+            # 不再限制只在frame中才尝试其他搜索策略，主页面找不到也要尝试frame
+            if not slider_track and track_search_frame:
+                # 如果按钮在frame中，先点击激活
+                if track_search_frame != self.page:
+                    logger.warning(f"【{self.pure_user_id}】在已知Frame中未找到轨道，尝试点击frame激活后再查找...")
+                    try:
+                        # 点击frame以激活它，让轨道出现
+                        # 尝试点击frame中的容器或按钮来激活
+                        clicked_element = False
+                        if slider_container:
+                            try:
+                                slider_container.click(timeout=1000)
+                                logger.info(f"【{self.pure_user_id}】已点击滑块容器以激活frame")
+                                clicked_element = True
+                                time.sleep(0.3)  # 等待轨道出现
+                            except:
+                                pass
+                        elif slider_button:
+                            try:
+                                slider_button.click(timeout=1000)
+                                logger.info(f"【{self.pure_user_id}】已点击滑块按钮以激活frame")
+                                clicked_element = True
+                                time.sleep(0.3)  # 等待轨道出现
+                            except:
+                                pass
+                        
+                        # 🔑 关键修复：点击后重新查找滑块按钮，因为DOM可能已更新
+                        if clicked_element:
+                            logger.info(f"【{self.pure_user_id}】点击激活frame后，重新查找滑块按钮以更新元素引用...")
+                            old_button = slider_button
+                            for selector in button_selectors:
                                 try:
-                                    if element.is_visible():
-                                        logger.info(f"【{self.pure_user_id}】点击frame后在Frame中找到滑块轨道: {selector}")
+                                    element = track_search_frame.query_selector(selector)
+                                    if element:
+                                        try:
+                                            if element.is_visible():
+                                                logger.info(f"【{self.pure_user_id}】重新找到滑块按钮: {selector}")
+                                                slider_button = element
+                                                break
+                                        except:
+                                            # 如果无法检查可见性，也尝试使用
+                                            logger.info(f"【{self.pure_user_id}】重新找到滑块按钮（无法检查可见性）: {selector}")
+                                            slider_button = element
+                                            break
+                                except:
+                                    continue
+                            
+                            if slider_button != old_button:
+                                logger.info(f"【{self.pure_user_id}】✅ 滑块按钮元素引用已更新")
+                            else:
+                                logger.warning(f"【{self.pure_user_id}】⚠️ 未能更新滑块按钮元素引用，可能导致后续操作失败")
+                        
+                        # 再次在同一个frame中查找轨道
+                        for selector in track_selectors:
+                            try:
+                                element = track_search_frame.query_selector(selector)
+                                if element:
+                                    try:
+                                        if element.is_visible():
+                                            logger.info(f"【{self.pure_user_id}】点击frame后在Frame中找到滑块轨道: {selector}")
+                                            slider_track = element
+                                            break
+                                    except:
+                                        # 如果无法检查可见性，也尝试使用
+                                        logger.info(f"【{self.pure_user_id}】点击frame后在Frame中找到滑块轨道（无法检查可见性）: {selector}")
                                         slider_track = element
                                         break
-                                except:
-                                    # 如果无法检查可见性，也尝试使用
-                                    logger.info(f"【{self.pure_user_id}】点击frame后在Frame中找到滑块轨道（无法检查可见性）: {selector}")
-                                    slider_track = element
-                                    break
-                        except:
-                            continue
-                except Exception as e:
-                    logger.debug(f"【{self.pure_user_id}】点击frame后查找轨道时出错: {e}")
+                            except:
+                                continue
+                    except Exception as e:
+                        logger.debug(f"【{self.pure_user_id}】点击frame后查找轨道时出错: {e}")
                 
-                # 如果点击frame后还是没找到，尝试在所有frame中查找
+                # 🔑 关键修复：无论按钮在哪里，都要在所有frame中查找轨道
                 if not slider_track:
-                    logger.warning(f"【{self.pure_user_id}】点击frame后仍未找到轨道，尝试在所有frame中查找...")
+                    location_desc = "点击frame后仍" if track_search_frame != self.page else "在已知位置"
+                    logger.warning(f"【{self.pure_user_id}】{location_desc}未找到轨道，尝试在所有frame中查找...")
                     try:
                         frames = self.page.frames
+                        logger.info(f"【{self.pure_user_id}】开始遍历{len(frames)}个frame查找轨道...")
                         for idx, frame in enumerate(frames):
                             if frame == track_search_frame:
+                                logger.debug(f"【{self.pure_user_id}】跳过Frame {idx}（已检查过）")
                                 continue  # 跳过已经检查过的frame
+                            logger.debug(f"【{self.pure_user_id}】检查Frame {idx}...")
                             for selector in track_selectors:
                                 try:
                                     element = frame.query_selector(selector)
                                     if element:
-                                        try:
-                                            if element.is_visible():
-                                                logger.info(f"【{self.pure_user_id}】在Frame {idx} 找到滑块轨道: {selector}")
-                                                slider_track = element
-                                                break
-                                        except:
-                                            pass
-                                except:
+                                        # 🔑 降低可见性要求：找到就使用，不强制检查可见性
+                                        logger.info(f"【{self.pure_user_id}】✅ 在Frame {idx} 找到滑块轨道: {selector}")
+                                        slider_track = element
+                                        # 更新found_frame为找到轨道的frame
+                                        found_frame = frame
+                                        break
+                                except Exception as e:
+                                    logger.debug(f"【{self.pure_user_id}】Frame {idx} 选择器 {selector} 出错: {e}")
                                     continue
                             if slider_track:
                                 break
+                        if not slider_track:
+                            logger.warning(f"【{self.pure_user_id}】遍历完{len(frames)}个frame，未找到轨道")
                     except Exception as e:
-                        logger.debug(f"【{self.pure_user_id}】在所有frame中查找轨道时出错: {e}")
+                        logger.error(f"【{self.pure_user_id}】在所有frame中查找轨道时出错: {e}")
             
             # 如果还是没找到，尝试在主页面查找
             if not slider_track:
@@ -1930,10 +2500,28 @@ class XianyuSliderStealth:
     def calculate_slide_distance(self, slider_button: ElementHandle, slider_track: ElementHandle):
         """计算滑动距离 - 增强精度，支持刮刮乐"""
         try:
-            # 获取滑块按钮位置和大小
-            button_box = slider_button.bounding_box()
+            # 🔑 增强错误处理：检查元素是否仍然有效
+            button_box = None
+            track_box = None
+            
+            # 尝试获取滑块按钮位置和大小（增加重试机制）
+            for retry in range(2):
+                try:
+                    button_box = slider_button.bounding_box()
+                    if button_box:
+                        break
+                    if retry == 0:
+                        logger.warning(f"【{self.pure_user_id}】第{retry+1}次获取滑块按钮位置失败，等待后重试...")
+                        time.sleep(0.1)
+                except Exception as e:
+                    if retry == 0:
+                        logger.warning(f"【{self.pure_user_id}】获取滑块按钮位置异常: {e}，等待后重试...")
+                        time.sleep(0.1)
+                    else:
+                        logger.error(f"【{self.pure_user_id}】多次尝试后仍无法获取滑块按钮位置: {e}")
+            
             if not button_box:
-                logger.error(f"【{self.pure_user_id}】无法获取滑块按钮位置")
+                logger.error(f"【{self.pure_user_id}】无法获取滑块按钮位置（元素可能已失效，建议重新查找元素）")
                 return 0
             
             # 获取滑块轨道位置和大小
@@ -2243,11 +2831,78 @@ class XianyuSliderStealth:
             logger.error(f"【{self.pure_user_id}】分析失败原因时出错: {e}")
             return {}
     
-    def solve_slider(self, max_retries: int = 3, fast_mode: bool = False):
+    def click_to_reset_slider(self):
+        """点击失败提示区域以重置滑块"""
+        try:
+            logger.info(f"【{self.pure_user_id}】尝试点击失败提示区域以重置滑块...")
+            
+            # 确定要点击的frame（使用已知的滑块frame）
+            target_frame = None
+            if hasattr(self, '_detected_slider_frame') and self._detected_slider_frame is not None:
+                target_frame = self._detected_slider_frame
+                logger.info(f"【{self.pure_user_id}】将在已知Frame中查找并点击")
+            else:
+                target_frame = self.page
+                logger.info(f"【{self.pure_user_id}】将在主页面中查找并点击")
+            
+            # 🔑 优化：按优先级尝试点击不同的区域
+            # 优先点击容器/包装器，因为这样更可靠
+            click_selectors = [
+                (".nc-container", "滑块容器"),
+                (".nc_wrapper", "滑块包装器"),  
+                (".nc_scale", "滑块轨道区域"),
+                ("#baxia-dialog-content", "对话框内容"),
+                ("#nc_1__bg", "背景区域"),
+                ("div[class*='nc']", "NC相关元素"),
+            ]
+            
+            clicked = False
+            for selector, desc in click_selectors:
+                try:
+                    element = target_frame.query_selector(selector)
+                    if element:
+                        try:
+                            # 获取元素位置，点击中心
+                            box = element.bounding_box()
+                            if box:
+                                click_x = box['x'] + box['width'] / 2
+                                click_y = box['y'] + box['height'] / 2
+                                target_frame.mouse.click(click_x, click_y)
+                                logger.info(f"【{self.pure_user_id}】✅ 已点击{desc}: {selector} (位置: {click_x:.1f}, {click_y:.1f})")
+                                clicked = True
+                                time.sleep(0.3)  # 短暂等待
+                                break
+                            else:
+                                # 如果无法获取位置，直接点击元素
+                                element.click(timeout=1000)
+                                logger.info(f"【{self.pure_user_id}】✅ 已点击{desc}: {selector}")
+                                clicked = True
+                                time.sleep(0.3)
+                                break
+                        except Exception as click_e:
+                            logger.debug(f"【{self.pure_user_id}】点击{desc} {selector} 失败: {click_e}")
+                            continue
+                except Exception as find_e:
+                    logger.debug(f"【{self.pure_user_id}】查找{desc} {selector} 失败: {find_e}")
+                    continue
+            
+            if clicked:
+                logger.info(f"【{self.pure_user_id}】成功点击失败提示区域，等待滑块重新加载...")
+                time.sleep(0.8)  # 等待滑块重新加载（增加等待时间）
+                return True
+            else:
+                logger.warning(f"【{self.pure_user_id}】未找到可点击的失败提示区域，滑块可能已存在")
+                return False
+                
+        except Exception as e:
+            logger.error(f"【{self.pure_user_id}】点击失败提示区域时出错: {e}")
+            return False
+    
+    def solve_slider(self, max_retries: int = 5, fast_mode: bool = False):
         """处理滑块验证（极速模式）
         
         Args:
-            max_retries: 最大重试次数（默认3次，因为同一个页面连续失败3次后就不会成功了）
+            max_retries: 最大重试次数（默认5次，增加成功率）
             fast_mode: 快速查找模式（当已确认滑块存在时使用，减少等待时间）
         """
         failure_records = []
@@ -2263,6 +2918,10 @@ class XianyuSliderStealth:
                     logger.info(f"【{self.pure_user_id}】等待{retry_delay:.2f}秒后重试...")
                     time.sleep(retry_delay)
                     
+                    # 🔑 关键修复：点击失败提示区域以重置滑块
+                    logger.info(f"【{self.pure_user_id}】尝试点击失败提示区域以重置滑块...")
+                    self.click_to_reset_slider()
+                    
                     # 不刷新页面，直接在原来的frame中重试
                     # 保留frame引用，让重试时可以直接使用原来的frame查找滑块
                     if hasattr(self, '_detected_slider_frame'):
@@ -2275,6 +2934,10 @@ class XianyuSliderStealth:
                 slider_container, slider_button, slider_track = self.find_slider_elements(fast_mode=fast_mode)
                 if not all([slider_container, slider_button, slider_track]):
                     logger.error(f"【{self.pure_user_id}】滑块元素查找失败")
+                    # 🔑 关键修复：清除缓存的frame位置，下次重试时重新全局搜索
+                    if hasattr(self, '_detected_slider_frame'):
+                        logger.warning(f"【{self.pure_user_id}】清除缓存的滑块位置信息，下次重试将重新全局搜索")
+                        delattr(self, '_detected_slider_frame')
                     continue
                 
                 # 2. 计算滑动距离
@@ -2283,8 +2946,8 @@ class XianyuSliderStealth:
                     logger.error(f"【{self.pure_user_id}】滑动距离计算失败")
                     continue
                 
-                # 3. 生成人类化轨迹
-                trajectory = self.generate_human_trajectory(slide_distance)
+                # 3. 生成人类化轨迹（传递尝试次数以增加随机扰动）
+                trajectory = self.generate_human_trajectory(slide_distance, attempt=attempt)
                 if not trajectory:
                     logger.error(f"【{self.pure_user_id}】轨迹生成失败")
                     continue
@@ -3592,7 +4255,7 @@ class XianyuSliderStealth:
                                                 f"账号: {self.pure_user_id}\n"
                                                 f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
                                                 f"请登录自动化网站，访问账号管理模块，进行对应账号的人脸验证"
-                                                f"在验证期间，闲鱼秒拍监控暂时无法使用。"
+                                                f"在验证期间，闲鱼自动回复暂时无法使用。"
                                             )
                                         else:
                                             notification_msg = (
@@ -3600,7 +4263,7 @@ class XianyuSliderStealth:
                                                 f"账号: {self.pure_user_id}\n"
                                                 f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
                                                 f"请点击验证链接完成验证:\n{frame_url}\n\n"
-                                                f"在验证期间，闲鱼秒拍监控暂时无法使用。"
+                                                f"在验证期间，闲鱼自动回复暂时无法使用。"
                                             )
                                         
                                         logger.info(f"【{self.pure_user_id}】准备发送人脸验证通知，截图路径: {screenshot_path}, URL: {frame_url}")

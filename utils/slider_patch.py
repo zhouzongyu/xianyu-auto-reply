@@ -85,10 +85,10 @@ def send_notification(user_id: str, title: str, message: str, notification_type:
                             msg = MIMEMultipart()
                             msg['From'] = smtp_from
                             msg['To'] = recipient_email
-                            msg['Subject'] = f"闲鱼秒拍监控通知 - {title}"
+                            msg['Subject'] = f"闲鱼自动回复通知 - {title}"
                             
                             # 邮件正文
-                            email_body = f"""【闲鱼秒拍监控系统通知】
+                            email_body = f"""【闲鱼自动回复系统通知】
 
 标题：{title}
 
@@ -101,7 +101,7 @@ def send_notification(user_id: str, title: str, message: str, notification_type:
 时间：{time.strftime('%Y-%m-%d %H:%M:%S')}
 
 此邮件由系统自动发送，请勿直接回复
-© 2025 闲鱼秒拍监控系统"""
+© 2025 闲鱼自动回复系统"""
                             
                             msg.attach(MIMEText(email_body, 'plain', 'utf-8'))
                             
