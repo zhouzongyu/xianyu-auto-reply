@@ -121,21 +121,51 @@
 
 .table th {
   border-top: none;
-  border-bottom: 2px solid var(--border-color);
-  font-weight: 600;
-  color: var(--dark-color);
-  background: rgba(79, 70, 229, 0.05);
-  padding: 1rem;
-}
-
-.table td {
-  padding: 1rem;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid #e5e7eb; /* 细线分隔 */
+  border-left: none; /* 移除垂直边框 */
+  border-right: none;
+  font-weight: 500; /* 降低字重 */
+  font-size: 0.875rem; /* 小字体，不要太大 */
+  color: #374151; /* 深灰色文字 */
+  background: #f9fafb; /* 浅灰色背景，匹配设计图 */
+  padding: 0.75rem 1rem; /* 减小内边距 */
   vertical-align: middle;
 }
 
+.table th:first-child {
+  padding-left: 1rem;
+}
+
+.table th:last-child {
+  padding-right: 1rem;
+}
+
+.table td {
+  padding: 0.75rem 1rem; /* 减小内边距 */
+  border-bottom: 1px solid #e5e7eb; /* 细线分隔 */
+  border-left: none; /* 移除垂直边框 */
+  border-right: none;
+  vertical-align: middle;
+  background: white; /* 白色背景 */
+  font-size: 0.875rem; /* 小字体，不要太大 */
+  color: #374151; /* 深灰色文字 */
+}
+
+.table td:first-child {
+  padding-left: 1rem;
+}
+
+.table td:last-child {
+  padding-right: 1rem;
+}
+
 .table tbody tr:hover {
-  background: rgba(79, 70, 229, 0.02);
+  background: #f8f9fa; /* 浅灰色悬停效果 */
+}
+
+.table {
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 .badge {

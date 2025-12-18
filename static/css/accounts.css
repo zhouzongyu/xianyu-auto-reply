@@ -192,6 +192,295 @@ input:checked + .status-slider:before {
   }
 }
 
+/* 添加账号方法卡片样式（匹配设计图：左图标 + 右文案） */
+.account-methods-grid .account-method-card {
+  display: block;
+  width: 100%;
+  background: #fff;
+  border: 1px solid #e7eef7;
+  border-radius: 10px;
+  padding: 14px 16px;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  user-select: none;
+}
+
+.account-methods-grid .account-method-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.06);
+  border-color: rgba(13, 110, 253, 0.35);
+}
+
+.account-methods-grid .account-method-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.account-methods-grid .method-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex: 0 0 auto;
+}
+
+.account-methods-grid .method-icon-primary {
+  background: rgba(13, 110, 253, 0.12);
+  color: #0d6efd;
+}
+
+.account-methods-grid .method-icon-muted {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.account-methods-grid .method-title {
+  font-weight: 700;
+  color: #0f172a;
+  line-height: 1.2;
+}
+
+.account-methods-grid .method-subtitle {
+  margin-top: 2px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.account-methods-grid .qr-method-card {
+  border: 2px solid rgba(13, 110, 253, 0.45);
+  background: linear-gradient(180deg, rgba(13, 110, 253, 0.06) 0%, rgba(13, 110, 253, 0.02) 100%);
+}
+
+/* 状态圆点样式 */
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* 状态文字样式 */
+#cookieTable td .d-flex.align-items-center.gap-2 {
+  font-size: 0.875rem; /* 小字体 */
+  color: #374151;
+}
+
+/* 关键词列样式 */
+#cookieTable td .d-inline-flex.align-items-center {
+  font-size: 0.875rem; /* 小字体 */
+}
+
+#cookieTable td .d-inline-flex.align-items-center i {
+  font-size: 0.875rem; /* 图标大小 */
+  color: #3b82f6; /* 蓝色图标 */
+}
+
+#cookieTable td .d-inline-flex.align-items-center span {
+  color: #3b82f6; /* 蓝色文字，匹配设计图 */
+  font-weight: 500;
+  cursor: pointer;
+}
+
+#cookieTable td .d-inline-flex.align-items-center span:hover {
+  text-decoration: underline;
+}
+
+.status-dot-enabled {
+  background-color: #10b981;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+}
+
+.status-dot-disabled {
+  background-color: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2);
+}
+
+/* 状态文字颜色 */
+#cookieTable td .d-flex.align-items-center.gap-2 span:last-child {
+  color: #10b981; /* 启用状态为绿色 */
+  font-size: 0.875rem;
+}
+
+.account-row.disabled #cookieTable td .d-flex.align-items-center.gap-2 span:last-child {
+  color: #ef4444; /* 禁用状态为红色 */
+}
+
+/* 操作按钮链接样式优化 */
+.btn-link {
+  text-decoration: none;
+  font-size: 0.875rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.btn-link:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+  text-decoration: none;
+}
+
+.btn-link:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-link.text-primary:hover {
+  background-color: rgba(13, 110, 253, 0.1);
+}
+
+.btn-link.text-danger:hover {
+  background-color: rgba(220, 53, 69, 0.1);
+}
+
+.btn-link.text-warning:hover {
+  background-color: rgba(255, 193, 7, 0.1);
+}
+
+/* 账号列表表格优化 */
+#cookieTable {
+  font-size: 0.875rem; /* 小字体，不要太大 */
+}
+
+#cookieTable tbody tr {
+  transition: background-color 0.2s ease;
+  background-color: white; /* 白色背景，匹配设计图 */
+}
+
+#cookieTable tbody tr:hover {
+  background-color: #f8f9fa; /* 浅灰色悬停效果 */
+}
+
+#cookieTable .cookie-id {
+  font-size: 0.875rem; /* 小字体 */
+  font-weight: 500; /* 降低字重 */
+}
+
+#cookieTable .cookie-id strong {
+  font-size: 0.875rem; /* 小字体 */
+  font-weight: 500;
+}
+
+#cookieTable .align-middle {
+  vertical-align: middle;
+}
+
+/* 账号数量徽章 */
+#accountCountBadge {
+  font-size: 0.8125rem; /* 小字体，不要太大 */
+  font-weight: 500;
+  padding: 0.25rem 0.5rem;
+}
+
+/* 卡片头部样式优化 */
+.card-header {
+  font-size: 0.9375rem; /* 标题字体适中 */
+  font-weight: 600;
+}
+
+.card-header span:first-child {
+  font-size: 0.9375rem; /* 标题字体适中 */
+}
+
+/* 胶囊标签（AI回复/自动确认） */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 0.75rem; /* 小字体，不要太大 */
+  font-weight: 500; /* 降低字重 */
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.pill-muted {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  color: #64748b;
+}
+
+.pill-primary {
+  background: rgba(13, 110, 253, 0.10);
+  border-color: rgba(13, 110, 253, 0.25);
+  color: #0d6efd;
+}
+
+.pill-success {
+  background: #10b981; /* 绿色背景，匹配设计图 */
+  border-color: #10b981;
+  color: white; /* 白色文字，匹配设计图 */
+}
+
+/* 表格操作区（彩色图标文字） */
+.table-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.table-actions .action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-decoration: none;
+  font-size: 0.8125rem; /* 小字体，不要太大 */
+  font-weight: 500; /* 降低字重 */
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.table-actions .action i {
+  font-size: 0.875rem; /* 图标稍大一点但不要太大 */
+}
+
+.table-actions .action-primary {
+  color: #0d6efd; /* 蓝色 */
+}
+
+.table-actions .action-primary i.bi-robot {
+  color: #8b5cf6; /* AI设置使用紫色，匹配设计图 */
+}
+
+.table-actions .action-primary:has(.bi-robot) {
+  color: #8b5cf6; /* AI设置使用紫色 */
+}
+
+.table-actions .action-primary:has(.bi-chat-text) {
+  color: #10b981; /* 默认回复使用绿色，匹配设计图 */
+}
+
+.table-actions .action-primary:has(.bi-chat-text) i {
+  color: #10b981;
+}
+
+.table-actions .action-warning {
+  color: #f59e0b; /* 橙色 */
+}
+
+.table-actions .action-danger {
+  color: #ef4444; /* 红色 */
+}
+
+.table-actions .action:hover {
+  background: rgba(15, 23, 42, 0.05);
+  text-decoration: none;
+}
+
+.table-actions .action.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 /* 响应式设计 */
 @media (max-width: 768px) {
   .status-toggle {
@@ -223,5 +512,13 @@ input:checked + .status-slider:before {
     width: 25px !important;
     height: 25px !important;
     font-size: 12px;
+  }
+
+  .account-method-card {
+    margin-bottom: 1rem;
+  }
+
+  #addAccountOptions {
+    flex-direction: column;
   }
 }

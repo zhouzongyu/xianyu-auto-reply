@@ -7,7 +7,7 @@
   left: 0;
   height: 100vh;
   width: 250px;
-  background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-hover) 100%);
+  background: #1e3a8a; /* 深蓝色背景，匹配设计图 */
   color: white;
   z-index: 1000;
   transition: all 0.3s ease;
@@ -73,22 +73,21 @@
   display: flex;
   align-items: center;
   padding: 0.75rem 1.5rem;
-  color: rgba(255,255,255,0.8);
+  color: rgba(255,255,255,0.9);
   text-decoration: none;
   transition: all 0.3s ease;
-  border-left: 3px solid transparent;
+  border-left: none; /* 移除左侧边框 */
 }
 
 .nav-link:hover {
   color: white;
   background: rgba(255,255,255,0.1);
-  border-left-color: rgba(255,255,255,0.5);
 }
 
 .nav-link.active {
   color: white;
-  background: rgba(255,255,255,0.15);
-  border-left-color: white;
+  background: #3b82f6; /* 浅蓝色高亮背景，匹配设计图 */
+  border-left: none; /* 移除左侧边框 */
 }
 
 .nav-link i {
