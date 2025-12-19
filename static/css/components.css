@@ -113,12 +113,17 @@
 
 /* ================================
    通用表格样式 - 适用于所有菜单的表格
+   根据设计图统一样式：浅灰表头、白色数据行、小字体、最小化边框
    ================================ */
 .table {
   margin-bottom: 0;
   background: transparent;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.875rem; /* 小字体，不要太大 */
 }
 
+/* 表头样式 - 浅灰色背景，深灰色文字 */
 .table th {
   border-top: none;
   border-bottom: 1px solid #e5e7eb; /* 细线分隔 */
@@ -140,6 +145,7 @@
   padding-right: 1rem;
 }
 
+/* 数据行样式 - 白色背景，深灰色文字 */
 .table td {
   padding: 0.75rem 1rem; /* 减小内边距 */
   border-bottom: 1px solid #e5e7eb; /* 细线分隔 */
@@ -159,13 +165,46 @@
   padding-right: 1rem;
 }
 
+/* 悬停效果 */
 .table tbody tr:hover {
   background: #f8f9fa; /* 浅灰色悬停效果 */
 }
 
-.table {
-  border-collapse: separate;
-  border-spacing: 0;
+/* 覆盖Bootstrap的table-dark和table-light类 */
+.table-dark th,
+.table-dark thead th {
+  background: #f9fafb !important; /* 浅灰色背景 */
+  color: #374151 !important; /* 深灰色文字 */
+  border-bottom: 1px solid #e5e7eb !important;
+}
+
+.table-light th,
+.table-light thead th {
+  background: #f9fafb !important; /* 浅灰色背景 */
+  color: #374151 !important; /* 深灰色文字 */
+  border-bottom: 1px solid #e5e7eb !important;
+}
+
+/* 覆盖table-striped的斑马纹 */
+.table-striped > tbody > tr:nth-of-type(odd) > td {
+  background-color: white; /* 保持白色背景 */
+}
+
+.table-striped > tbody > tr:nth-of-type(even) > td {
+  background-color: white; /* 保持白色背景 */
+}
+
+/* 覆盖table-bordered的边框 */
+.table-bordered th,
+.table-bordered td {
+  border-left: none !important; /* 移除垂直边框 */
+  border-right: none !important;
+  border-top: none !important;
+  border-bottom: 1px solid #e5e7eb !important; /* 只保留水平分隔线 */
+}
+
+.table-bordered {
+  border: none !important;
 }
 
 .badge {

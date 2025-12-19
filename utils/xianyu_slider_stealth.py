@@ -246,7 +246,7 @@ class XianyuSliderStealth:
     def __init__(self, user_id: str = "default", enable_learning: bool = True, headless: bool = True):
         self.user_id = user_id
         self.enable_learning = enable_learning
-        self.headless = headless  # 是否使用无头模式
+        self.headless = True  # 是否使用无头模式
         self.browser = None
         self.page = None
         self.context = None
@@ -3675,7 +3675,7 @@ class XianyuSliderStealth:
             playwright = sync_playwright().start()
             context = playwright.chromium.launch_persistent_context(
                 user_data_dir,
-                headless=not show_browser,
+                headless= False,
                 args=browser_args,
                 viewport={'width': 1980, 'height': 1024},
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',

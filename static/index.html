@@ -196,47 +196,70 @@
     <!-- 账号管理内容 -->
     <div id="accounts-section" class="content-section">
       <div class="content-header">
-        <h2 class="mb-0">
-          <i class="bi bi-person-circle me-2"></i>
-          账号管理
-        </h2>
-        <p class="text-muted mb-0">管理闲鱼账号Cookie信息</p>
+        <div class="d-flex justify-content-between align-items-center">
+          <div>
+            <h2 class="mb-0">
+              <i class="bi bi-person-circle me-2"></i>
+              账号管理
+            </h2>
+            <p class="text-muted mb-0">管理闲鱼账号Cookie信息</p>
+          </div>
+          <button class="btn btn-outline-primary btn-sm" onclick="loadCookies()" title="刷新">
+            <i class="bi bi-arrow-clockwise me-1"></i>刷新
+          </button>
+        </div>
       </div>
       <div class="content-body">
-        <!-- 添加Cookie卡片 -->
+        <!-- 添加新账号 -->
         <div class="card mb-4">
           <div class="card-header">
             <span><i class="bi bi-plus-circle me-2"></i>添加新账号</span>
           </div>
           <div class="card-body">
-            <!-- 添加方式选择 -->
-            <div class="row mb-4">
-              <div class="col-12">
-                <div class="d-grid gap-2 d-md-flex justify-content-md-center">
-                  <button type="button" class="btn btn-lg me-md-2 flex-fill qr-login-btn" onclick="showQRCodeLogin()" style="max-width: 300px;">
-                    <i class="bi bi-qr-code me-2"></i>
-                    <span class="fw-bold">扫码登录</span>
-                    <br>
-                    <small class="opacity-75">推荐方式</small>
-                  </button>
-                  <button type="button" class="btn btn-outline-primary btn-lg flex-fill password-login-btn" onclick="togglePasswordLogin()" style="max-width: 300px;">
-                    <i class="bi bi-key me-2"></i>
-                    <span class="fw-bold">账号密码登录</span>
-                    <br>
-                    <small class="opacity-75">使用账号和密码登录</small>
-                  </button>
-                  <button type="button" class="btn btn-outline-secondary btn-lg flex-fill manual-input-btn" onclick="toggleManualInput()" style="max-width: 300px;">
-                    <i class="bi bi-keyboard me-2"></i>
-                    <span class="fw-bold">手动输入</span>
-                    <br>
-                    <small class="opacity-75">使用消息界面的cookie</small>
-                  </button>
+            <div id="addAccountOptions" class="row g-3 account-methods-grid">
+              <div class="col-md-4">
+                <div class="account-method-card qr-method-card" role="button" tabindex="0" onclick="showQRCodeLogin()">
+                  <div class="account-method-inner">
+                    <div class="method-icon method-icon-primary">
+                      <i class="bi bi-qr-code"></i>
+                    </div>
+                    <div class="method-text">
+                      <div class="method-title">扫码登录</div>
+                      <div class="method-subtitle">推荐方式</div>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-
-            <!-- 账号密码登录表单（默认隐藏） -->
-            <div id="passwordLoginForm" style="display: none;">
+              <div class="col-md-4">
+                <div class="account-method-card" role="button" tabindex="0" onclick="togglePasswordLogin()">
+                  <div class="account-method-inner">
+                    <div class="method-icon method-icon-muted">
+                      <i class="bi bi-key"></i>
+                    </div>
+                    <div class="method-text">
+                      <div class="method-title">账号密码</div>
+                      <div class="method-subtitle">使用账号和密码</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="col-md-4">
+                <div class="account-method-card" role="button" tabindex="0" onclick="toggleManualInput()">
+                  <div class="account-method-inner">
+                    <div class="method-icon method-icon-muted">
+                      <i class="bi bi-pencil"></i>
+                    </div>
+                    <div class="method-text">
+                      <div class="method-title">手动输入</div>
+                      <div class="method-subtitle">手动输入Cookie</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div
+          
+          <!-- 账号密码登录表单（默认隐藏） -->
+          <div id="passwordLoginForm" style="display: none;" class="mt-4">
               <div class="alert alert-info">
                 <i class="bi bi-info-circle me-2"></i>
                 <strong>提示：</strong>使用账号密码登录，系统将自动获取Cookie。登录过程可能需要处理滑块验证，请耐心等待。
@@ -271,10 +294,10 @@
                   </button>
                 </div>
               </form>
-            </div>
+          </div>
 
-            <!-- 手动输入表单（默认隐藏） -->
-            <div id="manualInputForm" style="display: none;">
+          <!-- 手动输入表单（默认隐藏） -->
+          <div id="manualInputForm" style="display: none;" class="mt-4">
               <div class="alert alert-info">
                 <i class="bi bi-info-circle me-2"></i>
                 <strong>提示：</strong>推荐使用扫码登录，更加安全便捷。如需手动输入，请确保Cookie信息的准确性。
@@ -301,40 +324,30 @@
           </div>
         </div>
 
-        <!-- Cookie列表卡片 -->
+        <!-- 账号列表卡片 -->
         <div class="card">
           <div class="card-header d-flex justify-content-between align-items-center">
             <span><i class="bi bi-list-ul me-2"></i>账号列表</span>
-            <div class="btn-group">
-              <button class="btn btn-sm btn-outline-success" onclick="openDefaultReplyManager()">
-                <i class="bi bi-chat-text me-1"></i>默认回复管理
-              </button>
-              <button class="btn btn-sm btn-outline-primary" onclick="loadCookies()">
-                <i class="bi bi-arrow-clockwise me-1"></i>刷新
-              </button>
-            </div>
+            <span class="badge bg-light text-primary border" id="accountCountBadge">0个账号</span>
           </div>
           <div class="card-body p-0">
             <div class="table-responsive">
-              <table class="table table-hover" id="cookieTable">
+              <table class="table table-hover mb-0" id="cookieTable">
                 <thead>
                   <tr>
-                    <th style="width: 9%">账号ID</th>
-                    <th style="width: 14%">Cookie值</th>
-                    <th style="width: 7%">关键词</th>
-                    <th style="width: 7%">状态</th>
-                    <th style="width: 8%">默认回复</th>
-                    <th style="width: 8%">AI回复</th>
-                    <th style="width: 9%">自动确认发货</th>
-                    <th style="width: 10%">备注</th>
-                    <th style="width: 10%">
+                    <th style="width: 12%">账号ID</th>
+                    <th style="width: 10%">关键词</th>
+                    <th style="width: 10%">状态</th>
+                    <th style="width: 12%">AI回复</th>
+                    <th style="width: 12%">自动确认</th>
+                    <th style="width: 12%">
                       暂停时间
                       <i class="bi bi-question-circle ms-1"
                          data-bs-toggle="tooltip"
                          data-bs-placement="top"
                          title="检测到手动发出消息后，自动回复暂停的时间长度（分钟）。设置为0表示不暂停。如果在暂停期间再次手动发出消息，会重新开始计时。"></i>
                     </th>
-                    <th style="width: 18%">操作</th>
+                    <th style="width: 32%">操作</th>
                   </tr>
                 </thead>
                 <tbody></tbody>
@@ -1389,7 +1402,7 @@
             <div id="riskLogContainer" style="display: none;">
               <div class="table-responsive">
                 <table class="table table-hover mb-0">
-                  <thead class="table-light">
+                  <thead>
                     <tr>
                       <th width="120">时间</th>
                       <th width="100">账号</th>
@@ -1574,8 +1587,8 @@
         <div class="card">
           <div class="card-body">
             <div class="table-responsive">
-              <table class="table table-bordered table-hover" id="keywordConfigTable">
-                <thead class="table-light">
+              <table class="table table-hover" id="keywordConfigTable">
+                <thead>
                   <tr>
                     <th style="width: 12%">关键词 <i class="bi bi-info-circle" data-bs-toggle="tooltip" title="监控的主要关键词"></i></th>
                     <th style="width: 18%">包含的关键字 <i class="bi bi-info-circle" data-bs-toggle="tooltip" title="必须包含的关键字，多个用逗号分隔"></i></th>
@@ -1653,7 +1666,7 @@
           <div class="card-body p-0">
             <div class="table-responsive">
               <table class="table table-hover mb-0">
-                <thead class="table-light">
+                <thead>
                   <tr>
                     <th style="width: 5%">ID</th>
                     <th style="width: 25%">商品标题</th>
@@ -2175,8 +2188,8 @@
             </div>
             <div id="tableContainer" style="display: none;">
               <div class="table-responsive" style="max-height: 600px; overflow-y: auto;">
-                <table class="table table-striped table-hover" id="dataTable">
-                  <thead class="table-dark sticky-top">
+                <table class="table table-hover" id="dataTable">
+                  <thead class="sticky-top">
                     <tr id="tableHeaders"></tr>
                   </thead>
                   <tbody id="tableBody"></tbody>

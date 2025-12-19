@@ -1168,9 +1168,15 @@ async function loadCookies() {
     const cookieDetails = await fetchJSON(apiBase + '/cookies/details');
 
     if (cookieDetails.length === 0) {
+        // 更新账号数量
+        const accountCountBadge = document.getElementById('accountCountBadge');
+        if (accountCountBadge) {
+            accountCountBadge.textContent = '0个账号';
+        }
+        
         tbody.innerHTML = `
         <tr>
-            <td colspan="10" class="text-center py-4 text-muted empty-state">
+            <td colspan="7" class="text-center py-4 text-muted empty-state">
             <i class="bi bi-inbox fs-1 d-block mb-3"></i>
             <h5>暂无账号</h5>
             <p class="mb-0">请添加新的闲鱼账号开始使用</p>
@@ -1232,6 +1238,12 @@ async function loadCookies() {
         })
     );
 
+    // 更新账号数量
+    const accountCountBadge = document.getElementById('accountCountBadge');
+    if (accountCountBadge) {
+        accountCountBadge.textContent = `${accountsWithKeywords.length}个账号`;
+    }
+
     accountsWithKeywords.forEach(cookie => {
         // 使用数据库中的实际状态，默认为启用
         const isEnabled = cookie.enabled === undefined ? true : cookie.enabled;
@@ -1240,18 +1252,17 @@ async function loadCookies() {
 
         const tr = document.createElement('tr');
         tr.className = `account-row ${isEnabled ? 'enabled' : 'disabled'}`;
-        // 默认回复状态标签
-        const defaultReplyBadge = cookie.defaultReply.enabled ?
-        '<span class="badge bg-success">启用</span>' :
-        '<span class="badge bg-secondary">禁用</span>';
 
-        // AI回复状态标签
-        const aiReplyBadge = cookie.aiReply.ai_enabled ?
-        '<span class="badge bg-primary">AI启用</span>' :
-        '<span class="badge bg-secondary">AI禁用</span>';
+        // AI回复状态显示（胶囊标签）
+        const aiReplyStatus = cookie.aiReply.ai_enabled ?
+            '<span class="pill pill-primary"><i class="bi bi-robot me-1"></i>已开启</span>' :
+            '<span class="pill pill-muted"><i class="bi bi-robot me-1"></i>已关闭</span>';
 
         // 自动确认发货状态（默认开启）
         const autoConfirm = cookie.auto_confirm === undefined ? true : cookie.auto_confirm;
+        const autoConfirmBadge = autoConfirm ?
+            '<span class="pill pill-success">开启</span>' :
+            '<span class="pill pill-muted">关闭</span>';
 
         tr.innerHTML = `
         <td class="align-middle">
@@ -1260,97 +1271,51 @@ async function loadCookies() {
             </div>
         </td>
         <td class="align-middle">
-            <div class="cookie-value" title="点击复制Cookie" style="font-family: monospace; font-size: 0.875rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-            ${cookie.value || '未设置'}
-            </div>
-        </td>
-        <td class="align-middle">
-            <span class="badge ${cookie.keywordCount > 0 ? 'bg-success' : 'bg-secondary'}">
-            ${cookie.keywordCount} 个关键词
+            <span class="d-inline-flex align-items-center">
+                <i class="bi bi-chat-dots me-1"></i>
+                <span>${cookie.keywordCount}个</span>
             </span>
         </td>
         <td class="align-middle">
             <div class="d-flex align-items-center gap-2">
-            <label class="status-toggle" title="${isEnabled ? '点击禁用' : '点击启用'}">
-                <input type="checkbox" ${isEnabled ? 'checked' : ''} onchange="toggleAccountStatus('${cookie.id}', this.checked)">
-                <span class="status-slider"></span>
-            </label>
-            <span class="status-badge ${isEnabled ? 'enabled' : 'disabled'}" title="${isEnabled ? '账号已启用' : '账号已禁用'}">
-                <i class="bi bi-${isEnabled ? 'check-circle-fill' : 'x-circle-fill'}"></i>
-            </span>
+            <span class="status-dot ${isEnabled ? 'status-dot-enabled' : 'status-dot-disabled'}"></span>
+            <span>${isEnabled ? '启用' : '禁用'}</span>
             </div>
         </td>
         <td class="align-middle">
-            ${defaultReplyBadge}
+            ${aiReplyStatus}
         </td>
         <td class="align-middle">
-            ${aiReplyBadge}
-        </td>
-        <td class="align-middle">
-            <div class="d-flex align-items-center gap-2">
-            <label class="status-toggle" title="${autoConfirm ? '点击关闭自动确认发货' : '点击开启自动确认发货'}">
-                <input type="checkbox" ${autoConfirm ? 'checked' : ''} onchange="toggleAutoConfirm('${cookie.id}', this.checked)">
-                <span class="status-slider"></span>
-            </label>
-            <span class="status-badge ${autoConfirm ? 'enabled' : 'disabled'}" title="${autoConfirm ? '自动确认发货已开启' : '自动确认发货已关闭'}">
-                <i class="bi bi-${autoConfirm ? 'truck' : 'truck-flatbed'}"></i>
-            </span>
-            </div>
-        </td>
-        <td class="align-middle">
-            <div class="remark-cell" data-cookie-id="${cookie.id}">
-                <span class="remark-display" onclick="editRemark('${cookie.id}', '${(cookie.remark || '').replace(/'/g, '&#39;')}')" title="点击编辑备注" style="cursor: pointer; color: #6c757d; font-size: 0.875rem;">
-                    ${cookie.remark || '<i class="bi bi-plus-circle text-muted"></i> 添加备注'}
-                </span>
-            </div>
+            ${autoConfirmBadge}
         </td>
         <td class="align-middle">
             <div class="pause-duration-cell" data-cookie-id="${cookie.id}">
-                <span class="pause-duration-display" onclick="editPauseDuration('${cookie.id}', ${cookie.pause_duration !== undefined ? cookie.pause_duration : 10})" title="点击编辑暂停时间" style="cursor: pointer; color: #6c757d; font-size: 0.875rem;">
+                <span class="pause-duration-display d-inline-flex align-items-center" onclick="editPauseDuration('${cookie.id}', ${cookie.pause_duration !== undefined ? cookie.pause_duration : 10})" title="点击编辑暂停时间" style="cursor: pointer; color: #6c757d; font-size: 0.875rem;">
                     <i class="bi bi-clock me-1"></i>${cookie.pause_duration === 0 ? '不暂停' : (cookie.pause_duration || 10) + '分钟'}
                 </span>
             </div>
         </td>
         <td class="align-middle">
-            <div class="btn-group" role="group">
-            <button class="btn btn-sm btn-outline-secondary" onclick="showFaceVerification('${cookie.id}')" title="人脸验证">
-                <i class="bi bi-shield-check"></i>
-            </button>
-            <button class="btn btn-sm btn-outline-primary" onclick="editCookieInline('${cookie.id}', '${cookie.value}')" title="修改Cookie" ${!isEnabled ? 'disabled' : ''}>
-                <i class="bi bi-pencil"></i>
-            </button>
-            <button class="btn btn-sm btn-outline-success" onclick="goToAutoReply('${cookie.id}')" title="${isEnabled ? '设置自动回复' : '配置关键词 (账号已禁用)'}">
-                <i class="bi bi-arrow-right-circle"></i>
-            </button>
-            <button class="btn btn-sm btn-outline-warning" onclick="configAIReply('${cookie.id}')" title="配置AI回复" ${!isEnabled ? 'disabled' : ''}>
-                <i class="bi bi-robot"></i>
-            </button>
-            <button class="btn btn-sm btn-outline-info" onclick="copyCookie('${cookie.id}', '${cookie.value}')" title="复制Cookie">
-                <i class="bi bi-clipboard"></i>
-            </button>
-            
-            <button class="btn btn-sm btn-outline-danger" onclick="delCookie('${cookie.id}')" title="删除账号">
-                <i class="bi bi-trash"></i>
-            </button>
+            <div class="table-actions">
+              <a class="action action-primary ${!isEnabled ? 'disabled' : ''}" href="javascript:void(0)" onclick="if(!this.classList.contains('disabled')){configAIReply('${cookie.id}')}" title="AI设置">
+                <i class="bi bi-robot me-1"></i>AI设置
+              </a>
+              <a class="action action-primary" href="javascript:void(0)" onclick="openDefaultReplyManager('${cookie.id}')" title="默认回复">
+                <i class="bi bi-chat-text me-1"></i>默认回复
+              </a>
+              <a class="action action-warning" href="javascript:void(0)" onclick="toggleAccountStatus('${cookie.id}', ${!isEnabled})" title="${isEnabled ? '禁用' : '启用'}">
+                <i class="bi bi-${isEnabled ? 'pause-circle' : 'play-circle'} me-1"></i>${isEnabled ? '禁用' : '启用'}
+              </a>
+              <a class="action action-primary ${!isEnabled ? 'disabled' : ''}" href="javascript:void(0)" onclick="if(!this.classList.contains('disabled')){editCookieInline('${cookie.id}', '${cookie.value}')}" title="编辑">
+                <i class="bi bi-pencil me-1"></i>编辑
+              </a>
+              <a class="action action-danger" href="javascript:void(0)" onclick="delCookie('${cookie.id}')" title="删除">
+                <i class="bi bi-trash me-1"></i>删除
+              </a>
             </div>
         </td>
         `;
         tbody.appendChild(tr);
-    });
-
-    // 为Cookie值添加点击复制功能
-    document.querySelectorAll('.cookie-value').forEach(element => {
-        element.style.cursor = 'pointer';
-        element.addEventListener('click', function() {
-        const cookieValue = this.textContent;
-        if (cookieValue && cookieValue !== '未设置') {
-            navigator.clipboard.writeText(cookieValue).then(() => {
-            showToast('Cookie已复制到剪贴板', 'success');
-            }).catch(() => {
-            showToast('复制失败，请手动复制', 'error');
-            });
-        }
-        });
     });
 
     // 重新初始化工具提示
@@ -2097,11 +2062,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 // ==================== 默认回复管理功能 ====================
 
 // 打开默认回复管理器
-async function openDefaultReplyManager() {
+async function openDefaultReplyManager(accountId) {
     try {
     await loadDefaultReplies();
     const modal = new bootstrap.Modal(document.getElementById('defaultReplyModal'));
     modal.show();
+    
+    // 如果提供了账号ID，可以在这里进行预选等操作
+    if (accountId) {
+        // 可以在这里添加预选账号的逻辑
+        console.log('打开默认回复管理器，账号ID:', accountId);
+    }
     } catch (error) {
     console.error('打开默认回复管理器失败:', error);
     showToast('打开默认回复管理器失败', 'danger');
@@ -7074,7 +7045,8 @@ async function importKeywords() {
 function toggleManualInput() {
     const manualForm = document.getElementById('manualInputForm');
     const passwordForm = document.getElementById('passwordLoginForm');
-    if (manualForm.style.display === 'none') {
+    
+    if (manualForm.style.display === 'none' || !manualForm.style.display) {
         // 隐藏账号密码登录表单
         if (passwordForm) {
             passwordForm.style.display = 'none';
@@ -7091,7 +7063,8 @@ function toggleManualInput() {
 function togglePasswordLogin() {
     const passwordForm = document.getElementById('passwordLoginForm');
     const manualForm = document.getElementById('manualInputForm');
-    if (passwordForm.style.display === 'none') {
+    
+    if (passwordForm.style.display === 'none' || !passwordForm.style.display) {
         // 隐藏手动输入表单
         if (manualForm) {
             manualForm.style.display = 'none';

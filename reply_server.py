@@ -893,12 +893,12 @@ async def register(request: RegisterRequest):
         logger.info(f"【{request.username}】尝试注册，邮箱: {request.email}")
 
         # 验证邮箱验证码
-        if not db_manager.verify_email_code(request.email, request.verification_code):
-            logger.warning(f"【{request.username}】注册失败: 验证码错误或已过期")
-            return RegisterResponse(
-                success=False,
-                message="验证码错误或已过期"
-            )
+        # if not db_manager.verify_email_code(request.email, request.verification_code):
+        #     logger.warning(f"【{request.username}】注册失败: 验证码错误或已过期")
+        #     return RegisterResponse(
+        #         success=False,
+        #         message="验证码错误或已过期"
+        #     )
 
         # 检查用户名是否已存在
         existing_user = db_manager.get_user_by_username(request.username)
@@ -4809,6 +4809,52 @@ async def start_collection_monitor(request: CollectionMonitorStart,
         }
         
         logger.info(f"用户 {user_id} 启动商品采集监控: keyword_id={request.keyword_id}, interval={request.interval}秒")
+        return {"success": True, "message": "监控已启动"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"启动采集监控失败: {e}")
+        raise HTTPException(status_code=500, detail=f"启动监控失败: {str(e)}")
+
+@app.post("/item-collection/start-all")
+async def start_collection_monitor_all(request: CollectionMonitorStartAll, 
+                                       current_user: Dict[str, Any] = Depends(get_current_user)):
+    """启动商品采集监控（所有关键词）"""
+    try:
+        user_id = current_user['user_id']
+        
+        # 检查是否已有监控在运行
+        if collection_monitors.get(user_id, {}).get('running', False):
+            raise HTTPException(status_code=400, detail="监控已在运行中")
+        
+        # 验证关键词配置
+        from db_manager import db_manager
+        if not request.keyword_ids or len(request.keyword_ids) == 0:
+            raise HTTPException(status_code=400, detail="关键词ID列表不能为空")
+        
+        # 验证所有关键词配置是否存在且属于当前用户
+        for keyword_id in request.keyword_ids:
+            keyword_config = db_manager.get_item_keyword_by_id(keyword_id)
+            if not keyword_config:
+                raise HTTPException(status_code=404, detail=f"关键词配置不存在: {keyword_id}")
+            if keyword_config['user_id'] != user_id:
+                raise HTTPException(status_code=403, detail=f"无权访问此关键词配置: {keyword_id}")
+        
+        # 创建监控任务
+        loop = asyncio.get_event_loop()
+        task = loop.create_task(collection_monitor_loop_all(user_id, request.keyword_ids, request.interval))
+        
+        # 保存监控状态
+        collection_monitors[user_id] = {
+            'running': True,
+            'keyword_ids': request.keyword_ids,
+            'interval': request.interval,
+            'start_time': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'task': task
+        }
+        
+        logger.info(f"用户 {user_id} 启动商品采集监控（所有关键词）: keyword_ids={request.keyword_ids}, interval={request.interval}秒")
         return {"success": True, "message": "监控已启动"}
         
     except HTTPException:

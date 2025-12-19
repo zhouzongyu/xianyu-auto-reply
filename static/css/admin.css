@@ -31,27 +31,35 @@
     border-radius: 8px;
 }
 
-.table th {
+/* 数据管理表格样式 - 使用设计图样式 */
+.table-container .table th {
     position: sticky;
     top: 0;
-    background: var(--dark-color);
-    color: white;
+    background: #f9fafb; /* 浅灰色背景，匹配设计图 */
+    color: #374151; /* 深灰色文字 */
     z-index: 10;
-    border: none;
-    font-weight: 600;
-    font-size: 0.875rem;
-    padding: 0.75rem;
+    border-top: none;
+    border-bottom: 1px solid #e5e7eb;
+    border-left: none;
+    border-right: none;
+    font-weight: 500;
+    font-size: 0.875rem; /* 小字体，不要太大 */
+    padding: 0.75rem 1rem;
 }
 
-.table td {
-    padding: 0.75rem;
-    font-size: 0.875rem;
-    border-bottom: 1px solid var(--border-color);
+.table-container .table td {
+    padding: 0.75rem 1rem;
+    font-size: 0.875rem; /* 小字体，不要太大 */
+    border-bottom: 1px solid #e5e7eb;
+    border-left: none;
+    border-right: none;
     vertical-align: middle;
+    background: white; /* 白色背景 */
+    color: #374151; /* 深灰色文字 */
 }
 
-.table tbody tr:hover {
-    background-color: rgba(79, 70, 229, 0.05);
+.table-container .table tbody tr:hover {
+    background-color: #f8f9fa; /* 浅灰色悬停效果 */
 }
 
 /* 数据统计卡片 */
